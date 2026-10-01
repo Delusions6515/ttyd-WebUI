@@ -3,6 +3,7 @@ import { mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import ExtraKeysBar from './ExtraKeysBar.vue'
 import ModifierInput from './ModifierInput.vue'
+import type { ToolbarKey } from '../terminal/key-definitions'
 type ModifierStates = { ctrl: 'off' | 'once' | 'locked'; alt: 'off' | 'once' | 'locked' }
 
 const off: ModifierStates = { ctrl: 'off', alt: 'off' }
@@ -32,6 +33,48 @@ describe('ExtraKeysBar', () => {
     expect(wrapper.emitted('key')).toEqual([['UP'], ['F12']])
     await wrapper.find('button[aria-label="Ctrl+C"]').trigger('click')
     expect(wrapper.emitted('shortcut')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('renders configured key rows and routes plain shortcut data as terminal input', async () => {
+    const keyRows: readonly (readonly ToolbarKey[])[] = [[
+      {
+        label: 'Ctrl+F12',
+        ariaLabel: 'Custom terminal shortcut',
+        action: {
+          type: 'shortcut',
+          modifiers: ['ctrl'],
+          sequence: [{ type: 'text', text: 'x' }, { type: 'key', key: 'F12' }],
+        },
+      },
+    ], [{ label: 'slash', ariaLabel: 'slash', action: { type: 'text', text: '/' } }]]
+    const wrapper = mount(ExtraKeysBar, {
+      props: { connected: true, modifierState: off, inputEpoch: 3, keyRows },
+    })
+
+    expect(wrapper.findAll('.extra-key-row').map((row) => row.text())).toEqual(['Ctrl+F12', 'slash'])
+    await wrapper.find('button[aria-label="Custom terminal shortcut"]').trigger('click')
+    expect(wrapper.emitted('shortcut')).toEqual([[
+      { label: 'Ctrl+F12', modifiers: ['ctrl'], sequence: [{ type: 'text', text: 'x' }, { type: 'key', key: 'F12' }] },
+    ]])
+    wrapper.unmount()
+  })
+
+  it('renders markup-looking configuration as inert text and emits only its input data', async () => {
+    const label = '<b>input</b>'
+    const keyRows: readonly (readonly ToolbarKey[])[] = [
+      [{ label, ariaLabel: 'Plain text action', action: { type: 'text', text: 'alert(1)' } }],
+      [{ label: 'F12', ariaLabel: 'F12', action: { type: 'key', key: 'F12' } }],
+    ]
+    const wrapper = mount(ExtraKeysBar, {
+      props: { connected: true, modifierState: off, inputEpoch: 5, keyRows },
+    })
+    const button = wrapper.get('button[aria-label="Plain text action"]')
+    expect(button.text()).toBe(label)
+    expect(wrapper.find('b').exists()).toBe(false)
+    await button.trigger('click')
+    expect(wrapper.emitted('text')).toEqual([['alert(1)', 5]])
+    expect(wrapper.emitted('shortcut')).toBeUndefined()
     wrapper.unmount()
   })
 

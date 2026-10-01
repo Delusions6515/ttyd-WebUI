@@ -13,7 +13,25 @@ import type {
 class FakeTerminal implements TerminalLike {
   cols = 80
   rows = 24
-  options = { disableStdin: true }
+  fontLoaded = false
+  measuredCellWidth = 8
+  fontMeasurementCalls = 0
+  private fontFamilyValue = '"JetBrainsMono Nerd Font Mono", monospace'
+  options: TerminalLike['options']
+
+  constructor() {
+    const terminal = this
+    this.options = {
+      disableStdin: true,
+      get fontFamily() { return terminal.fontFamilyValue },
+      set fontFamily(value: string | undefined) {
+        terminal.fontFamilyValue = value ?? ''
+        terminal.fontMeasurementCalls++
+        terminal.measuredCellWidth = terminal.fontLoaded ? 10 : 8
+      },
+      fontSize: 13,
+    }
+  }
   modes = { applicationCursorKeysMode: false }
   writes: Uint8Array[] = []
   pendingWrites: Array<() => void> = []
@@ -61,9 +79,17 @@ class FakeTerminal implements TerminalLike {
 
 class FakeFitAddon implements FitAddonLike {
   fitCount = 0
+  readonly measuredWidths: number[] = []
   onFit?: () => void
+  private readonly terminal: FakeTerminal
+
+  constructor(terminal: FakeTerminal) {
+    this.terminal = terminal
+  }
+
   fit(): void {
     this.fitCount++
+    this.measuredWidths.push(this.terminal.measuredCellWidth)
     this.onFit?.()
   }
 }
@@ -109,7 +135,7 @@ function makeHarness(options: {
     terminal.cols = options.size.cols
     terminal.rows = options.size.rows
   }
-  const fitAddon = new FakeFitAddon()
+  const fitAddon = new FakeFitAddon(terminal)
   const clients: FakeClient[] = []
   const available = options.available ?? vi.fn(async () => ({ state: 'running' as const }))
   const container = {
@@ -138,9 +164,82 @@ async function flushPromises(): Promise<void> {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 describe('TerminalController', () => {
+  it('does not wait for bundled font loading and refits when it succeeds or falls back', async () => {
+    let resolveFont!: () => void
+    const fontLoad = new Promise<void>((resolve) => { resolveFont = resolve })
+    const load = vi.fn(() => fontLoad)
+    vi.stubGlobal('document', { fonts: { load } })
+    const { controller, terminal, fitAddon, clients } = makeHarness()
+    const initialFitCount = fitAddon.fitCount
+
+    const initialFontFamily = terminal.options.fontFamily
+    expect(terminal.options.fontFamily).toContain('JetBrainsMono Nerd Font Mono')
+    clients[0]!.event({ state: 'connected' })
+    expect(terminal.options.disableStdin).toBe(false)
+    terminal.emitData('usable before font load settles')
+    expect(clients[0]!.sentInputs).toEqual(['usable before font load settles'])
+    controller.setFontSize(19)
+    expect(terminal.options.fontSize).toBe(19)
+    expect(terminal.fontMeasurementCalls).toBe(0)
+    const fitCountBeforeFont = fitAddon.fitCount
+    expect(fitCountBeforeFont).toBeGreaterThanOrEqual(initialFitCount)
+
+    terminal.fontLoaded = true
+    resolveFont()
+    await flushPromises()
+    expect(terminal.fontMeasurementCalls).toBe(2)
+    expect(fitAddon.fitCount).toBeGreaterThan(fitCountBeforeFont)
+    expect(fitAddon.measuredWidths.at(-1)).toBe(10)
+    expect(terminal.options.fontSize).toBe(19)
+    expect(terminal.options.fontFamily).toBe(initialFontFamily)
+    expect(load).toHaveBeenNthCalledWith(1, '13px "JetBrainsMono Nerd Font Mono"', 'W')
+    expect(load).toHaveBeenNthCalledWith(2, 'bold 13px "JetBrainsMono Nerd Font Mono"', 'W')
+    controller.destroy()
+  })
+
+  it('does not update xterm options after font loading settles for a destroyed terminal', async () => {
+    let resolveFont!: () => void
+    const fontLoad = new Promise<void>((resolve) => { resolveFont = resolve })
+    vi.stubGlobal('document', { fonts: { load: vi.fn(() => fontLoad) } })
+    const { controller, terminal, fitAddon } = makeHarness()
+    const fitWidthsBeforeDestroy = [...fitAddon.measuredWidths]
+
+    controller.destroy()
+    terminal.fontLoaded = true
+    resolveFont()
+    await flushPromises()
+
+    expect(terminal.fontMeasurementCalls).toBe(0)
+    expect(fitAddon.measuredWidths).toEqual(fitWidthsBeforeDestroy)
+  })
+
+  it('uses the monospace fallback and still refits after font loading fails', async () => {
+    let rejectFont!: (error: Error) => void
+    const fontLoad = new Promise<void>((_resolve, reject) => { rejectFont = reject })
+    const load = vi.fn(() => fontLoad)
+    vi.stubGlobal('document', { fonts: { load } })
+    const { controller, terminal, fitAddon, clients } = makeHarness()
+    const initialFitCount = fitAddon.fitCount
+
+    clients[0]!.event({ state: 'connected' })
+    expect(terminal.options.disableStdin).toBe(false)
+    expect(terminal.options.fontFamily).toContain('monospace')
+    controller.setFontSize(19)
+    expect(terminal.options.fontSize).toBe(19)
+    expect(fitAddon.fitCount).toBe(initialFitCount + 2)
+
+    rejectFont(new Error('font unavailable'))
+    await flushPromises()
+    expect(load).toHaveBeenCalledTimes(2)
+    expect(terminal.fontMeasurementCalls).toBe(2)
+    expect(fitAddon.measuredWidths.at(-1)).toBe(8)
+    expect(fitAddon.fitCount).toBeGreaterThan(initialFitCount + 2)
+    controller.destroy()
+  })
   it('classifies only complete session snapshots as running, stopped, or missing', () => {
     expect(sessionAvailabilityFromSnapshot({ sessions: [{ name: 'dev_shell', status: 'running' }] }, 'dev_shell'))
       .toEqual({ state: 'running' })

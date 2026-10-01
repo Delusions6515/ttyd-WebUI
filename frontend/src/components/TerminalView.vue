@@ -9,7 +9,8 @@ import TerminalToolsSheet from './TerminalToolsSheet.vue'
 import { TerminalInputController } from '../terminal/input-controller'
 import { encodeHardwareKey } from '../terminal/hardware-key-encoder'
 import type { ModifierStates } from '../terminal/input-controller'
-import type { ShortcutPreset } from '../terminal/key-definitions'
+import { DEFAULT_KEY_ROWS } from '../terminal/key-definitions'
+import type { ShortcutPreset, ToolbarKey } from '../terminal/key-definitions'
 import type { TerminalKey, TerminalModifier } from '../terminal/key-encoder'
 import { canReadClipboardText, readClipboardText, writeClipboardText } from '../composables/useClipboard'
 import { TerminalController, sessionAvailabilityFromSnapshot } from '../terminal/terminal-controller'
@@ -19,8 +20,14 @@ import { getBufferText } from '../terminal/buffer-text'
 const props = withDefaults(defineProps<{
   sessionName: string | null
   enabled?: boolean
+  fontSize?: number
+  keyRows?: readonly (readonly ToolbarKey[])[]
+  showExtraKeys?: boolean
 }>(), {
   enabled: true,
+  fontSize: 13,
+  keyRows: () => DEFAULT_KEY_ROWS,
+  showExtraKeys: true,
 })
 
 const emit = defineEmits<{
@@ -195,8 +202,8 @@ function mountTerminal(): void {
   }
 
   const terminal = new Terminal({
-    fontSize: 13,
-    fontFamily: 'monospace',
+    fontSize: props.fontSize,
+    fontFamily: '"JetBrainsMono Nerd Font Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace',
     disableStdin: true,
     cursorBlink: true,
     theme: {
@@ -417,6 +424,12 @@ function handleShortcut(preset: ShortcutPreset): void {
   inputController?.sendPreset(preset)
 }
 
+watch(() => props.fontSize, (fontSize) => controller?.setFontSize(fontSize), { flush: 'post' })
+watch(() => props.showExtraKeys, (visible) => {
+  if (visible) return
+  inputController?.reset()
+  if (status.value === 'connected') terminalInstance?.focus()
+}, { flush: 'sync' })
 watch(() => [props.sessionName, props.enabled] as const, () => {
   disposeTerminal()
   void nextTick(mountTerminal)
@@ -463,11 +476,13 @@ defineExpose({
       />
     </div>
     <ExtraKeysBar
+      v-if="showExtraKeys"
       :key="sessionName ?? 'no-session'"
       ref="extraKeys"
       :connected="status === 'connected'"
       :modifier-state="modifierState"
       :input-epoch="inputController?.generation ?? 0"
+      :key-rows="keyRows"
       @key="handleVirtualKey"
       @text="handleVirtualText"
       @paste="handlePaste"
@@ -490,8 +505,8 @@ defineExpose({
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  color: #d2d2d2;
-  background: #111318;
+  color: var(--color-text);
+  background: var(--color-canvas);
 }
 
 .terminal-status {
@@ -501,8 +516,8 @@ defineExpose({
   gap: 0.5rem;
   min-height: 1.75rem;
   padding: 0 0.625rem;
-  color: #aeb4c0;
-  font: 0.75rem/1.2 system-ui, sans-serif;
+  color: var(--color-text-muted);
+  font: 0.75rem/1.2 var(--font-interface);
 }
 
 .status-indicator {
@@ -513,12 +528,12 @@ defineExpose({
 }
 
 .terminal-view[data-state='connected'] .status-indicator {
-  color: #5fc98b;
+  color: var(--color-success);
 }
 
 .terminal-view[data-state='error'] .status-indicator,
 .terminal-view[data-state='disconnected'] .status-indicator {
-  color: #ef7777;
+  color: var(--color-error);
 }
 
 .terminal-title,

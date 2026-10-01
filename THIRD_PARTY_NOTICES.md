@@ -25,3 +25,9 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## JetBrains Mono Nerd Font Mono
+
+The bundled `JetBrainsMonoNerdFontMono-Regular.ttf` and `JetBrainsMonoNerdFontMono-Bold.ttf` are unmodified files from the fixed [Nerd Fonts v3.4.0 JetBrainsMono release archive](https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.zip) (archive SHA-256 `76f05ff3ace48a464a6ca57977998784ff7bdbb65a6d915d7e401cd3927c493c`). The font patch is from [Nerd Fonts' JetBrainsMono source](https://github.com/ryanoasis/nerd-fonts/tree/v3.4.0/patched-fonts/JetBrainsMono).
+
+The release's `OFL.txt` identifies the original JetBrains Mono font copyright as `Copyright 2020 The JetBrains Mono Project Authors` and licenses it under the SIL Open Font License 1.1. The Nerd Fonts v3.4.0 root [`LICENSE`](https://github.com/ryanoasis/nerd-fonts/blob/v3.4.0/LICENSE) separately states that source and patched fonts use the SIL Open Font License 1.1 and includes its font-patcher contribution notice for Ryan L McIntyre. Both upstream notice texts are included in `frontend/public/fonts/OFL.txt` and `frontend/public/fonts/NERD-FONTS-LICENSE.txt`; the latter also preserves Nerd Fonts' separate MIT terms for its source code. The patched font is not relicensed under this repository's root license.

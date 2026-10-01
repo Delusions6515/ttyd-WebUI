@@ -3,18 +3,25 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppHeader from './components/AppHeader.vue'
 import CreateSessionDialog from './components/CreateSessionDialog.vue'
 import SessionDrawer from './components/SessionDrawer.vue'
+import SettingsSheet from './components/SettingsSheet.vue'
 import TerminalView from './components/TerminalView.vue'
 import { useVisualViewport } from './composables/useVisualViewport'
+import { createPreferencesStore } from './stores/preferences'
 import { createSessionStore } from './stores/sessions'
 import type { TerminalConnectionStatus } from './types/session'
+import './styles/theme.css'
+import './styles/fonts.css'
 import './styles/layout.css'
 
 const store = createSessionStore()
+const preferenceStore = createPreferencesStore()
 const { state } = store
+const { state: preferences } = preferenceStore
 const viewport = useVisualViewport()
 const drawerOpen = ref(false)
 const sidebarCollapsed = ref(false)
 const createDialogOpen = ref(false)
+const settingsOpen = ref(false)
 const keyboardRequested = ref(false)
 const terminalStatus = ref<TerminalConnectionStatus>('disconnected')
 const terminalView = ref<{ focusTerminal(): void; blurTerminal(): void } | null>(null)
@@ -59,6 +66,7 @@ watch(() => state.selectedName, () => { keyboardRequested.value = false })
       @toggle-sessions="drawerOpen = true"
       @toggle-sidebar="sidebarCollapsed = !sidebarCollapsed"
       @toggle-keyboard="toggleKeyboard"
+      @open-settings="settingsOpen = true"
     />
     <div class="app-workspace">
       <SessionDrawer
@@ -88,10 +96,20 @@ watch(() => state.selectedName, () => { keyboardRequested.value = false })
           ref="terminalView"
           :session-name="state.selectedName"
           :enabled="selectedSession?.status === 'running'"
+          :font-size="preferences.fontSize"
+          :key-rows="preferences.keyRows"
+          :show-extra-keys="preferences.showExtraKeys"
           @state="(status) => { terminalStatus = status }"
         />
       </main>
     </div>
+    <SettingsSheet
+      :open="settingsOpen"
+      :preferences="preferences"
+      @close="settingsOpen = false"
+      @save="preferenceStore.save"
+      @reset="preferenceStore.reset"
+    />
     <CreateSessionDialog
       :open="createDialogOpen"
       :shells="state.shells"

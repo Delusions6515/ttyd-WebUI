@@ -1,6 +1,9 @@
-export type TerminalKey =
-  | 'ESC' | 'TAB' | 'HOME' | 'END' | 'UP' | 'DOWN' | 'LEFT' | 'RIGHT' | 'PGUP' | 'PGDN'
-  | 'F1' | 'F2' | 'F3' | 'F4' | 'F5' | 'F6' | 'F7' | 'F8' | 'F9' | 'F10' | 'F11' | 'F12'
+export const TERMINAL_KEYS = [
+  'ESC', 'TAB', 'HOME', 'END', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'PGUP', 'PGDN',
+  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+] as const
+
+export type TerminalKey = typeof TERMINAL_KEYS[number]
 
 export type TerminalModifier = 'ctrl' | 'alt'
 

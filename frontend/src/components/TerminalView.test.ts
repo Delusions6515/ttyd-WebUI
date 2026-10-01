@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import type { Component } from 'vue'
+import type { ToolbarKey } from '../terminal/key-definitions'
 
 let TerminalView: Component
 beforeAll(async () => {
@@ -21,15 +22,16 @@ const terminalHarness = vi.hoisted(() => {
     selection: string
     bufferLines: Array<{ text: string; isWrapped: boolean }>
     wheelHandler: ((event: WheelEvent) => boolean) | undefined
+    options: { disableStdin?: boolean; fontFamily?: string; fontSize?: number }
     focus(): void
   }> = []
-  const controllers: Array<{ sentInputs: string[]; setState(state: string): void }> = []
+  const controllers: Array<{ sentInputs: string[]; fontSizes: number[]; setState(state: string): void }> = []
 
   class PublicTerminalMock {
     cols = 80
     rows = 24
     modes = { applicationCursorKeysMode: false }
-    options: { disableStdin?: boolean }
+    options: { disableStdin?: boolean; fontFamily?: string; fontSize?: number }
     focusCalls = 0
     textarea: HTMLTextAreaElement | undefined = undefined
     pasteCalls: string[] = []
@@ -56,7 +58,7 @@ const terminalHarness = vi.hoisted(() => {
     }
 
     constructor(options: unknown) {
-      this.options = options as { disableStdin?: boolean }
+      this.options = options as { disableStdin?: boolean; fontFamily?: string; fontSize?: number }
       terminals.push(this)
     }
 
@@ -89,6 +91,7 @@ const terminalHarness = vi.hoisted(() => {
 
   class PublicTerminalControllerMock {
     sentInputs: string[] = []
+    fontSizes: number[] = []
     private readonly terminal: PublicTerminalMock
     private readonly onState: (state: string, error?: string) => void
 
@@ -100,6 +103,7 @@ const terminalHarness = vi.hoisted(() => {
     }
 
     setState(state: string): void { this.onState(state) }
+    setFontSize(fontSize: number): void { this.fontSizes.push(fontSize) }
     get applicationCursorKeysMode(): boolean { return this.terminal.modes.applicationCursorKeysMode }
     sendVirtualInput(data: string): boolean { this.sentInputs.push(data); return true }
     destroy(): void {}
@@ -156,6 +160,53 @@ function touchEvent(type: string, touches: TestTouch[], changedTouches = touches
 }
 
 describe('TerminalView virtual input seam', () => {
+  it('uses bundled Nerd Font settings and updates terminal size and configured rows without a page zoom', async () => {
+    const customRows: readonly (readonly ToolbarKey[])[] = [[
+      { label: 'RUN', ariaLabel: 'Run shortcut', action: { type: 'text', text: 'x' } },
+    ], [{ label: 'F12', ariaLabel: 'F12', action: { type: 'key', key: 'F12' } }]]
+    const wrapper = mount(TerminalView, {
+      props: { sessionName: 'preferences_shell', enabled: true, fontSize: 17, keyRows: customRows, showExtraKeys: false },
+    })
+    await nextTick()
+    const terminal = terminalHarness.terminals[0]!
+    const controller = terminalHarness.controllers[0]!
+
+    expect(terminal.options.fontSize).toBe(17)
+    expect(terminal.options.fontFamily).toContain('JetBrainsMono Nerd Font Mono')
+    expect(terminal.options.fontFamily).toContain('monospace')
+    expect(wrapper.find('.extra-keys-bar').exists()).toBe(false)
+
+    await wrapper.setProps({ fontSize: 19, showExtraKeys: true })
+    await nextTick()
+    expect(controller.fontSizes).toEqual([19])
+    expect(wrapper.findAll('.extra-key-row').map((row) => row.text())).toEqual(['RUN', 'F12'])
+    wrapper.unmount()
+  })
+  it('exposes the terminal tools entry point for touch copy, paste and local scrolling', async () => {
+    const wrapper = mount(TerminalView, {
+      attachTo: document.body,
+      props: { sessionName: 'tools_shell', enabled: true },
+    })
+    await nextTick()
+    expect(wrapper.find('button[aria-label="终端工具"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('clears active virtual modifiers when the configurable key bar is hidden', async () => {
+    const wrapper = mount(TerminalView, {
+      props: { sessionName: 'hidden_keybar_shell', enabled: true },
+    })
+    await nextTick()
+    await wrapper.find('button[aria-label="CTRL"]').trigger('click')
+    expect(wrapper.find('button[aria-label="CTRL"]').attributes('data-mode')).toBe('once')
+
+    await wrapper.setProps({ showExtraKeys: false })
+    expect(wrapper.find('.extra-keys-bar').exists()).toBe(false)
+    await wrapper.setProps({ showExtraKeys: true })
+    expect(wrapper.find('button[aria-label="CTRL"]').attributes('data-mode')).toBe('off')
+    wrapper.unmount()
+  })
+
   it('routes hardware keys exactly once from the modifier field without applying or consuming virtual modifiers', async () => {
     const wrapper = mount(TerminalView, {
       attachTo: document.body,
@@ -179,16 +230,6 @@ describe('TerminalView virtual input seam', () => {
     await nextTick()
     field.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
     expect(controller.sentInputs).toHaveLength(5)
-    wrapper.unmount()
-  })
-
-  it('exposes the terminal tools entry point for touch copy, paste and local scrolling', async () => {
-    const wrapper = mount(TerminalView, {
-      attachTo: document.body,
-      props: { sessionName: 'tools_shell', enabled: true },
-    })
-    await nextTick()
-    expect(wrapper.find('button[aria-label="终端工具"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

@@ -7,6 +7,7 @@ export type ToolbarKeyAction =
   | { type: 'key'; key: TerminalKey }
   | { type: 'text'; text: string }
   | { type: 'modifier'; modifier: TerminalModifier }
+  | { type: 'shortcut'; modifiers: readonly TerminalModifier[]; sequence: readonly InputToken[] }
 
 export interface ToolbarKey {
   label: string

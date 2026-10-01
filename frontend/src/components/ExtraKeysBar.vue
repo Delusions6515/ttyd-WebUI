@@ -6,11 +6,14 @@ import type { ShortcutPreset, ToolbarKey } from '../terminal/key-definitions'
 import type { TerminalKey, TerminalModifier } from '../terminal/key-encoder'
 import type { ModifierStates } from '../terminal/input-controller'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   connected: boolean
   modifierState: ModifierStates
   inputEpoch: number
-}>()
+  keyRows?: readonly (readonly ToolbarKey[])[]
+}>(), {
+  keyRows: () => DEFAULT_KEY_ROWS,
+})
 
 const emit = defineEmits<{
   key: [key: TerminalKey]
@@ -32,8 +35,9 @@ interface ModifierPress {
 const modifierPresses = new Map<TerminalModifier, ModifierPress>()
 const suppressClick = new Set<TerminalModifier>()
 
-function activate(action: ToolbarKey['action']): void {
+function activate(item: ToolbarKey): void {
   if (!props.connected) return
+  const action = item.action
   switch (action.type) {
     case 'key':
       emit('key', action.key)
@@ -45,6 +49,9 @@ function activate(action: ToolbarKey['action']): void {
       if (suppressClick.delete(action.modifier)) return
       emit('modifier', action.modifier)
       emit('focusModifierInput')
+      break
+    case 'shortcut':
+      emit('shortcut', { label: item.label, modifiers: action.modifiers, sequence: action.sequence })
       break
   }
 }
@@ -126,10 +133,10 @@ defineExpose({ focusModifierInput, blurModifierInput })
 
 <template>
   <nav class="extra-keys-bar" aria-label="终端快捷键">
-    <div v-for="(row, index) in DEFAULT_KEY_ROWS" :key="index" class="extra-key-row">
+    <div v-for="(row, index) in keyRows" :key="index" class="extra-key-row" :style="{ gridTemplateColumns: `repeat(${row.length}, minmax(2.75rem, 1fr))` }">
       <button
-        v-for="item in row"
-        :key="item.ariaLabel"
+        v-for="(item, itemIndex) in row"
+        :key="`${item.ariaLabel}-${itemIndex}`"
         type="button"
         class="extra-key-button"
         :class="{ 'modifier-button': item.action.type === 'modifier' }"
@@ -140,7 +147,7 @@ defineExpose({ focusModifierInput, blurModifierInput })
         @pointerdown="onPointerDown(item, $event)"
         @pointerup="item.action.type === 'modifier' ? onModifierPointerUp(item.action.modifier) : undefined"
         @pointercancel="item.action.type === 'modifier' ? onModifierPointerCancel(item.action.modifier) : undefined"
-        @click="activate(item.action)"
+        @click="activate(item)"
       >{{ item.label }}</button>
     </div>
     <div class="extra-key-actions">
@@ -167,7 +174,7 @@ defineExpose({ focusModifierInput, blurModifierInput })
           :aria-label="item.ariaLabel"
           :disabled="!connected"
           @pointerdown.prevent
-          @click="activate(item.action)"
+          @click="activate(item)"
         >{{ item.label }}</button>
       </div>
       <div class="extra-key-shortcuts">
@@ -196,41 +203,50 @@ defineExpose({ focusModifierInput, blurModifierInput })
   gap: 0.3rem;
   padding: 0.35rem 0.45rem;
   border-top: 1px solid #292d36;
-  background: #171a20;
-  color: #e8ebf1;
+  background: var(--color-surface);
+  color: var(--color-text);
   touch-action: manipulation;
 }
 
 .extra-key-row {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(2.75rem, 1fr));
   gap: 0.3rem;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
 }
 
 .extra-key-button,
 .extra-key-more {
   min-width: 0;
-  min-height: 2.65rem;
-  border: 1px solid #383e49;
+  min-height: 2.75rem;
+  border: 1px solid var(--color-border);
   border-radius: 0.45rem;
   padding: 0.25rem 0.15rem;
-  background: #20242c;
+  background: var(--color-surface-raised);
   color: inherit;
   font: 600 0.8rem/1.1 system-ui, sans-serif;
   white-space: nowrap;
   -webkit-tap-highlight-color: transparent;
 }
 
-.extra-key-button:active,
+.extra-key-button:active {
+  border-color: var(--color-accent);
+  background: var(--color-surface-active);
+}
+
 .extra-key-button[data-mode='once'] {
-  border-color: #76a9ed;
-  background: #2b3b51;
+  border-color: var(--color-accent);
+  background: var(--color-surface-active);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
 }
 
 .extra-key-button[data-mode='locked'] {
-  border-color: #e8b763;
+  border-color: var(--color-locked);
   background: #49391e;
   color: #ffdf9e;
+  box-shadow: inset 0 0 0 1px var(--color-locked);
 }
 
 .extra-key-button:focus-visible,
@@ -251,9 +267,9 @@ defineExpose({ focusModifierInput, blurModifierInput })
 }
 
 .extra-key-more {
-  min-height: 1.8rem;
+  min-height: 2.75rem;
   padding: 0.2rem 0.6rem;
-  color: #aeb4c0;
+  color: var(--color-text-muted);
   font-size: 0.7rem;
 }
 

@@ -13,6 +13,7 @@ defineEmits<{
   toggleSessions: []
   toggleSidebar: []
   toggleKeyboard: []
+  openSettings: []
 }>()
 
 const statusLabels: Record<TerminalConnectionStatus, string> = {
@@ -51,6 +52,9 @@ const statusLabels: Record<TerminalConnectionStatus, string> = {
     >
       {{ keyboardRequested ? '隐藏键盘' : '显示键盘' }}
     </button>
+    <button class="header-button settings-toggle" type="button" aria-label="设置" @click="$emit('openSettings')">
+      设置
+    </button>
   </header>
 </template>
 
@@ -64,25 +68,20 @@ const statusLabels: Record<TerminalConnectionStatus, string> = {
   min-height: 3.25rem;
   padding: 0.35rem 0.75rem;
   border-bottom: 1px solid #292d36;
-  background: #171a20;
-  color: #eceff4;
+  background: var(--color-surface);
+  color: var(--color-text);
   font: 0.875rem/1.2 system-ui, sans-serif;
 }
 
 .header-button {
   min-width: 2.5rem;
-  min-height: 2.4rem;
-  border: 1px solid #383e49;
+  min-height: 2.75rem;
+  border: 1px solid var(--color-border);
   border-radius: 0.5rem;
   padding: 0.35rem 0.65rem;
-  background: #20242c;
+  background: var(--color-surface-raised);
   color: inherit;
   font: inherit;
-}
-
-.header-button:focus-visible {
-  outline: 2px solid #84b6ff;
-  outline-offset: 2px;
 }
 
 .sessions-toggle {

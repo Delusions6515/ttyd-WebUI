@@ -33,7 +33,7 @@ export interface TerminalLike {
   cols: number
   rows: number
   modes: { applicationCursorKeysMode: boolean }
-  options: { disableStdin?: boolean }
+  options: { disableStdin?: boolean; fontFamily?: string; fontSize?: number }
   open(parent: HTMLElement): void
   focus(): void
   reset(): void
@@ -107,6 +107,7 @@ export class TerminalController {
     this.installTerminalListeners()
     this.installResizeObserver()
     this.fitIfVisible()
+    this.watchBundledFont()
     this.startConnection()
   }
 
@@ -117,6 +118,12 @@ export class TerminalController {
   sendVirtualInput(data: string): boolean {
     if (this.disposed || this.status !== 'connected') return false
     return this.client?.sendInput(data) ?? false
+  }
+
+  setFontSize(fontSize: number): void {
+    if (this.disposed || !Number.isInteger(fontSize) || fontSize < 8 || fontSize > 32) return
+    this.options.terminal.options.fontSize = fontSize
+    this.fitIfVisible()
   }
 
   setEnabled(enabled: boolean): void {
@@ -191,6 +198,41 @@ export class TerminalController {
     const { width, height } = this.options.container.getBoundingClientRect()
     if (width <= 0 || height <= 0) return
     this.options.fitAddon.fit()
+  }
+
+  private watchBundledFont(): void {
+    const fontFamily = this.options.terminal.options.fontFamily
+      ?.split(',')[0]
+      ?.trim()
+      .replace(/^(["'])(.*)\1$/u, '$2')
+    const fontSize = this.options.terminal.options.fontSize
+    if (!fontFamily || !fontSize || typeof document === 'undefined' || !document.fonts?.load) return
+
+    const fontRequests = [
+      `${fontSize}px "${fontFamily}"`,
+      `bold ${fontSize}px "${fontFamily}"`,
+    ]
+    const settledLoads: Promise<unknown>[] = []
+    for (const fontRequest of fontRequests) {
+      try {
+        settledLoads.push(document.fonts.load(fontRequest, 'W').catch(() => undefined))
+      } catch {
+        settledLoads.push(Promise.resolve())
+      }
+    }
+    void Promise.all(settledLoads).then(() => this.remeasureBundledFont())
+  }
+
+  private remeasureBundledFont(): void {
+    if (this.disposed) return
+    const { terminal } = this.options
+    const fontFamily = terminal.options.fontFamily
+    if (fontFamily) {
+      // xterm caches cell metrics until a public font option changes; keep the effective family unchanged.
+      terminal.options.fontFamily = `${fontFamily}, sans-serif`
+      terminal.options.fontFamily = fontFamily
+    }
+    this.fitIfVisible()
   }
 
   private startConnection(): void {

@@ -14,15 +14,16 @@ body,
 }
 
 body {
-  background: #111318;
-  color: #e8ebf1;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-text);
+  font-family: var(--font-interface);
   overscroll-behavior: none;
 }
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -49,7 +50,7 @@ button:disabled {
   padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
   overflow: hidden;
-  background: #111318;
+  background: var(--color-canvas);
 }
 
 .app-workspace {
