@@ -1,0 +1,12 @@
+{
+  "name": "ttyd-webui",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter ./frontend --filter ./server dev",
+    "build": "pnpm --filter ./frontend build",
+    "start": "pnpm --filter ./server start",
+    "typecheck": "pnpm --filter ./frontend typecheck",
+    "verify": "pnpm build"
+  }
+}

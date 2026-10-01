@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.pnpm-store/
+
+# Build output and caches
+dist/
+**/dist/
+coverage/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+*.local
