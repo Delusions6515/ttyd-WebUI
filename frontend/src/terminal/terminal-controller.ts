@@ -32,6 +32,7 @@ export function sessionAvailabilityFromSnapshot(snapshot: unknown, sessionName: 
 export interface TerminalLike {
   cols: number
   rows: number
+  modes: { applicationCursorKeysMode: boolean }
   options: { disableStdin?: boolean }
   open(parent: HTMLElement): void
   focus(): void
@@ -50,7 +51,7 @@ export interface FitAddonLike {
 
 export interface TerminalClient {
   connect(size: TerminalSizeSource): void
-  sendInput(data: string | Uint8Array): void
+  sendInput(data: string | Uint8Array): boolean
   resize(columns: number, rows: number): void
   pause(): void
   resume(): void
@@ -107,6 +108,15 @@ export class TerminalController {
     this.installResizeObserver()
     this.fitIfVisible()
     this.startConnection()
+  }
+
+  get applicationCursorKeysMode(): boolean {
+    return this.options.terminal.modes.applicationCursorKeysMode
+  }
+
+  sendVirtualInput(data: string): boolean {
+    if (this.disposed || this.status !== 'connected') return false
+    return this.client?.sendInput(data) ?? false
   }
 
   setEnabled(enabled: boolean): void {

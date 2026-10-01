@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { sessionAvailabilityFromSnapshot, TerminalController } from './terminal-controller'
+import { TerminalInputController } from './input-controller'
 import type {
   FitAddonLike,
   SessionAvailability,
@@ -13,6 +14,7 @@ class FakeTerminal implements TerminalLike {
   cols = 80
   rows = 24
   options = { disableStdin: true }
+  modes = { applicationCursorKeysMode: false }
   writes: Uint8Array[] = []
   pendingWrites: Array<() => void> = []
   disposed = false
@@ -82,7 +84,7 @@ class FakeClient implements TerminalClient {
   }
 
   connect(size: { columns: number; rows: number } | (() => { columns: number; rows: number })): void { this.sizeSource = size }
-  sendInput(data: string | Uint8Array): void { this.sentInputs.push(data) }
+  sendInput(data: string | Uint8Array): boolean { this.sentInputs.push(data); return true }
   resize(columns: number, rows: number): void { this.sizes.push({ columns, rows }) }
   pause(): void { this.pauseCount++ }
   resume(): void { this.resumeCount++ }
@@ -169,6 +171,34 @@ describe('TerminalController', () => {
     expect(terminal.options.disableStdin).toBe(true)
     terminal.emitData('not queued')
     expect(clients[0].sentInputs).toHaveLength(2)
+    controller.destroy()
+  })
+
+  it('routes virtual keys through the live connection without rewriting xterm hardware or protocol input', () => {
+    const { controller, terminal, clients } = makeHarness()
+    const input = new TerminalInputController({
+      sendInput: (data) => controller.sendVirtualInput(data),
+      getApplicationCursorKeysMode: () => controller.applicationCursorKeysMode,
+    })
+    const client = clients[0]
+    expect(controller.sendVirtualInput('before ready')).toBe(false)
+    client.event({ state: 'connected' })
+
+    input.toggleModifier('ctrl')
+    terminal.emitData('\u0003')
+    terminal.emitData('\u001b[?1;2$y')
+    expect(input.modifiers.ctrl).toBe('once')
+    expect(client.sentInputs).toEqual(['\u0003', '\u001b[?1;2$y'])
+    expect(input.submitText('c')).toBe(true)
+    expect(client.sentInputs).toEqual(['\u0003', '\u001b[?1;2$y', '\u0003'])
+    expect(input.modifiers.ctrl).toBe('off')
+
+    terminal.modes.applicationCursorKeysMode = true
+    expect(input.pressKey('UP')).toBe(true)
+    expect(client.sentInputs.at(-1)).toBe('\u001bOA')
+    client.event({ state: 'disconnected', retryable: false })
+    expect(controller.sendVirtualInput('not queued')).toBe(false)
+    input.destroy()
     controller.destroy()
   })
 

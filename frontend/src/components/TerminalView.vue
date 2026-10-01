@@ -4,6 +4,12 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
+import ExtraKeysBar from './ExtraKeysBar.vue'
+import { TerminalInputController } from '../terminal/input-controller'
+import { encodeHardwareKey } from '../terminal/hardware-key-encoder'
+import type { ModifierStates } from '../terminal/input-controller'
+import type { ShortcutPreset } from '../terminal/key-definitions'
+import type { TerminalKey, TerminalModifier } from '../terminal/key-encoder'
 import { TerminalController, sessionAvailabilityFromSnapshot } from '../terminal/terminal-controller'
 import type { SessionAvailability, TerminalStatus } from '../terminal/terminal-controller'
 
@@ -19,10 +25,13 @@ const emit = defineEmits<{
 }>()
 
 const terminalElement = ref<HTMLElement>()
+const extraKeys = ref<InstanceType<typeof ExtraKeysBar> | null>(null)
+const modifierState = ref<ModifierStates>({ ctrl: 'off', alt: 'off' })
 const status = ref<TerminalStatus>('disconnected')
 const connectionError = ref('')
 const title = ref('')
 let controller: TerminalController | undefined
+let inputController: TerminalInputController | undefined
 let terminalInstance: Terminal | undefined
 
 const statusText: Record<TerminalStatus, string> = {
@@ -46,6 +55,10 @@ async function checkSessionAvailable(sessionName: string, signal: AbortSignal): 
 }
 
 function disposeTerminal(): void {
+  status.value = 'disconnected'
+  inputController?.destroy()
+  inputController = undefined
+  modifierState.value = { ctrl: 'off', alt: 'off' }
   controller?.destroy()
   controller = undefined
   terminalInstance = undefined
@@ -80,6 +93,19 @@ function mountTerminal(): void {
   terminal.loadAddon(new WebLinksAddon())
   terminal.open(terminalElement.value)
 
+  inputController = new TerminalInputController({
+    sendInput: (data) => controller?.sendVirtualInput(data) ?? false,
+    getApplicationCursorKeysMode: () => controller?.applicationCursorKeysMode ?? terminal.modes.applicationCursorKeysMode,
+    onModifiersChange: (nextState) => {
+      const previouslyActive = modifierState.value.ctrl !== 'off' || modifierState.value.alt !== 'off'
+      const active = nextState.ctrl !== 'off' || nextState.alt !== 'off'
+      modifierState.value = nextState
+      if (previouslyActive && !active) {
+        extraKeys.value?.blurModifierInput()
+        if (status.value === 'connected') terminalInstance?.focus()
+      }
+    },
+  })
   controller = new TerminalController({
     sessionName: props.sessionName,
     terminal,
@@ -88,11 +114,50 @@ function mountTerminal(): void {
     checkSessionAvailable,
     onState: (nextStatus, error) => {
       status.value = nextStatus
+      if (nextStatus !== 'connected') inputController?.reset()
       connectionError.value = error ?? ''
       emit('state', nextStatus, error)
     },
     onTitle: (nextTitle) => { title.value = nextTitle },
   })
+}
+
+function handleModifierToggle(modifier: TerminalModifier): void {
+  inputController?.toggleModifier(modifier)
+  focusForModifierState()
+}
+
+function handleModifierLock(modifier: TerminalModifier): void {
+  inputController?.lockModifier(modifier)
+}
+
+function focusForModifierState(): void {
+  if (inputController?.hasActiveModifiers) extraKeys.value?.focusModifierInput()
+  else {
+    extraKeys.value?.blurModifierInput()
+    terminalInstance?.focus()
+  }
+}
+
+function handleVirtualKey(key: TerminalKey): void {
+  inputController?.pressKey(key)
+}
+
+function handleVirtualText(text: string, generation: number): void {
+  inputController?.submitText(text, 'virtual', generation)
+}
+
+function handleHardwareKey(event: KeyboardEvent, generation: number): void {
+  const data = encodeHardwareKey(event, controller?.applicationCursorKeysMode ?? false)
+  if (data !== undefined) inputController?.submitText(data, 'text', generation)
+}
+
+function handlePaste(text: string, generation: number): void {
+  inputController?.submitText(text, 'paste', generation)
+}
+
+function handleShortcut(preset: ShortcutPreset): void {
+  inputController?.sendPreset(preset)
 }
 
 watch(() => [props.sessionName, props.enabled] as const, () => {
@@ -118,6 +183,21 @@ defineExpose({
     </header>
     <div v-if="!sessionName" class="terminal-empty">请选择会话</div>
     <div v-else ref="terminalElement" class="terminal-container"></div>
+    <ExtraKeysBar
+      :key="sessionName ?? 'no-session'"
+      ref="extraKeys"
+      :connected="status === 'connected'"
+      :modifier-state="modifierState"
+      :input-epoch="inputController?.generation ?? 0"
+      @key="handleVirtualKey"
+      @text="handleVirtualText"
+      @paste="handlePaste"
+      @hardware="handleHardwareKey"
+      @modifier="handleModifierToggle"
+      @lock-modifier="handleModifierLock"
+      @shortcut="handleShortcut"
+      @focus-modifier-input="focusForModifierState"
+    />
   </section>
 </template>
 
