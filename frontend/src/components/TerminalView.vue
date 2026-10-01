@@ -5,13 +5,16 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import ExtraKeysBar from './ExtraKeysBar.vue'
+import TerminalToolsSheet from './TerminalToolsSheet.vue'
 import { TerminalInputController } from '../terminal/input-controller'
 import { encodeHardwareKey } from '../terminal/hardware-key-encoder'
 import type { ModifierStates } from '../terminal/input-controller'
 import type { ShortcutPreset } from '../terminal/key-definitions'
 import type { TerminalKey, TerminalModifier } from '../terminal/key-encoder'
+import { canReadClipboardText, readClipboardText, writeClipboardText } from '../composables/useClipboard'
 import { TerminalController, sessionAvailabilityFromSnapshot } from '../terminal/terminal-controller'
 import type { SessionAvailability, TerminalStatus } from '../terminal/terminal-controller'
+import { getBufferText } from '../terminal/buffer-text'
 
 const props = withDefaults(defineProps<{
   sessionName: string | null
@@ -30,6 +33,32 @@ const modifierState = ref<ModifierStates>({ ctrl: 'off', alt: 'off' })
 const status = ref<TerminalStatus>('disconnected')
 const connectionError = ref('')
 const title = ref('')
+const localScrollMode = ref(false)
+const textInputOpen = ref(false)
+const copyViewOpen = ref(false)
+const copyText = ref('')
+const toolsMessage = ref('')
+interface TerminalTarget {
+  sessionName: string
+  inputGeneration: number
+  controller: TerminalController
+}
+interface LocalTouchGesture {
+  identifier: number
+  lastY: number
+  accumulatedPixels: number
+}
+type LocalTouchListener = (event: TouchEvent) => void
+interface LocalTouchHandlers {
+  surface: HTMLElement
+  start: LocalTouchListener
+  move: LocalTouchListener
+  end: LocalTouchListener
+  cancel: LocalTouchListener
+}
+let textTarget: TerminalTarget | undefined
+let localTouchHandlers: LocalTouchHandlers | undefined
+let localTouchGesture: LocalTouchGesture | undefined
 let controller: TerminalController | undefined
 let inputController: TerminalInputController | undefined
 let terminalInstance: Terminal | undefined
@@ -54,8 +83,98 @@ async function checkSessionAvailable(sessionName: string, signal: AbortSignal): 
   }
 }
 
+function clearLocalTouchGesture(): void {
+  localTouchGesture = undefined
+}
+
+function stopLocalTouchEvent(event: TouchEvent): void {
+  if (!localScrollMode.value) return
+  if (event.cancelable) event.preventDefault()
+  event.stopImmediatePropagation()
+}
+
+function handleLocalTouchStart(event: TouchEvent): void {
+  if (!localScrollMode.value) return
+  stopLocalTouchEvent(event)
+  if (event.touches.length !== 1) {
+    clearLocalTouchGesture()
+    return
+  }
+  const touch = event.changedTouches[0]
+  if (!touch) return
+  localTouchGesture = { identifier: touch.identifier, lastY: touch.clientY, accumulatedPixels: 0 }
+}
+
+function handleLocalTouchMove(event: TouchEvent, terminal: Terminal): void {
+  if (!localScrollMode.value) return
+  stopLocalTouchEvent(event)
+  const gesture = localTouchGesture
+  if (!gesture || event.touches.length !== 1) {
+    clearLocalTouchGesture()
+    return
+  }
+  let changedTouch: Touch | undefined
+  for (let index = 0; index < event.changedTouches.length; index++) {
+    const touch = event.changedTouches[index]
+    if (touch?.identifier === gesture.identifier) changedTouch = touch
+  }
+  if (!changedTouch) return
+
+  gesture.accumulatedPixels += gesture.lastY - changedTouch.clientY
+  gesture.lastY = changedTouch.clientY
+  const lines = Math.trunc(gesture.accumulatedPixels / 18)
+  if (lines !== 0) {
+    gesture.accumulatedPixels -= lines * 18
+    terminal.scrollLines(lines)
+  }
+}
+
+function handleLocalTouchEnd(event: TouchEvent): void {
+  if (!localScrollMode.value) return
+  stopLocalTouchEvent(event)
+  clearLocalTouchGesture()
+}
+
+function attachLocalTouchHandlers(surface: HTMLElement, terminal: Terminal): void {
+  const handlers: LocalTouchHandlers = {
+    surface,
+    start: handleLocalTouchStart,
+    move: (event) => handleLocalTouchMove(event, terminal),
+    end: handleLocalTouchEnd,
+    cancel: handleLocalTouchEnd,
+  }
+  localTouchHandlers = handlers
+  surface.addEventListener('touchstart', handlers.start, { capture: true, passive: false })
+  surface.addEventListener('touchmove', handlers.move, { capture: true, passive: false })
+  surface.addEventListener('touchend', handlers.end, { capture: true, passive: false })
+  surface.addEventListener('touchcancel', handlers.cancel, { capture: true, passive: false })
+}
+
+function detachLocalTouchHandlers(): void {
+  if (!localTouchHandlers) return
+  const { surface, start, move, end, cancel } = localTouchHandlers
+  surface.removeEventListener('touchstart', start, true)
+  surface.removeEventListener('touchmove', move, true)
+  surface.removeEventListener('touchend', end, true)
+  surface.removeEventListener('touchcancel', cancel, true)
+  localTouchHandlers = undefined
+  clearLocalTouchGesture()
+}
+
+function clearToolState(): void {
+  localScrollMode.value = false
+  clearLocalTouchGesture()
+  textInputOpen.value = false
+  textTarget = undefined
+  copyViewOpen.value = false
+  copyText.value = ''
+  toolsMessage.value = ''
+}
+
 function disposeTerminal(): void {
   status.value = 'disconnected'
+  detachLocalTouchHandlers()
+  clearToolState()
   inputController?.destroy()
   inputController = undefined
   modifierState.value = { ctrl: 'off', alt: 'off' }
@@ -92,6 +211,12 @@ function mountTerminal(): void {
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
   terminal.open(terminalElement.value)
+  attachLocalTouchHandlers(terminalElement.value, terminal)
+  terminal.attachCustomWheelEventHandler((event) => {
+    if (!localScrollMode.value) return true
+    if (event.deltaY !== 0) terminal.scrollLines(Math.sign(event.deltaY) * 3)
+    return false
+  })
 
   inputController = new TerminalInputController({
     sendInput: (data) => controller?.sendVirtualInput(data) ?? false,
@@ -114,7 +239,13 @@ function mountTerminal(): void {
     checkSessionAvailable,
     onState: (nextStatus, error) => {
       status.value = nextStatus
-      if (nextStatus !== 'connected') inputController?.reset()
+      if (nextStatus !== 'connected') {
+        inputController?.reset()
+        localScrollMode.value = false
+        clearLocalTouchGesture()
+        textInputOpen.value = false
+        textTarget = undefined
+      }
       connectionError.value = error ?? ''
       emit('state', nextStatus, error)
     },
@@ -152,8 +283,134 @@ function handleHardwareKey(event: KeyboardEvent, generation: number): void {
   if (data !== undefined) inputController?.submitText(data, 'text', generation)
 }
 
+function captureConnectedTarget(): TerminalTarget | undefined {
+  if (!props.sessionName || status.value !== 'connected' || !controller || !inputController) return undefined
+  return {
+    sessionName: props.sessionName,
+    inputGeneration: inputController.generation,
+    controller,
+  }
+}
+
+function ownsTarget(target: TerminalTarget): boolean {
+  return props.sessionName === target.sessionName
+    && status.value === 'connected'
+    && controller === target.controller
+    && inputController?.generation === target.inputGeneration
+}
+
 function handlePaste(text: string, generation: number): void {
-  inputController?.submitText(text, 'paste', generation)
+  if (!text || status.value !== 'connected' || inputController?.generation !== generation) return
+  terminalInstance?.paste(text)
+}
+
+function openTextInput(target = captureConnectedTarget()): void {
+  if (!target) {
+    toolsMessage.value = '请先连接一个会话'
+    return
+  }
+  toolsMessage.value = ''
+  textTarget = target
+  textInputOpen.value = true
+}
+
+function sendText(text: string, appendEnter: boolean): void {
+  const target = textTarget
+  if (!target || !ownsTarget(target) || !text || !terminalInstance) return
+  terminalInstance.paste(text)
+  if (appendEnter) terminalInstance.input('\r', true)
+  toolsMessage.value = ''
+  textInputOpen.value = false
+  textTarget = undefined
+}
+
+function closeTextInput(): void {
+  textInputOpen.value = false
+  textTarget = undefined
+}
+
+async function pasteClipboard(): Promise<void> {
+  toolsMessage.value = ''
+  const target = captureConnectedTarget()
+  if (!target) return
+  if (!canReadClipboardText()) {
+    openTextInput(target)
+    return
+  }
+
+  const text = await readClipboardText()
+  if (!ownsTarget(target)) {
+    if (props.sessionName === target.sessionName) toolsMessage.value = '会话连接已变化，未粘贴剪贴板内容'
+    return
+  }
+  if (text === null) {
+    toolsMessage.value = '无法读取剪贴板，请在文本框中使用系统粘贴'
+    openTextInput(target)
+    return
+  }
+  if (!text) {
+    toolsMessage.value = '剪贴板为空'
+    return
+  }
+  terminalInstance?.paste(text)
+}
+
+async function copySelection(): Promise<void> {
+  toolsMessage.value = ''
+  const selection = terminalInstance?.getSelection() ?? ''
+  if (!selection) {
+    toolsMessage.value = '请先在终端中选择文本'
+    return
+  }
+  const target = captureConnectedTarget()
+  if (!target) {
+    toolsMessage.value = '终端未连接，无法复制选区'
+    return
+  }
+  const copied = await writeClipboardText(selection)
+  if (!ownsTarget(target)) return
+  if (copied) {
+    toolsMessage.value = '已复制所选文本'
+    return
+  }
+  copyText.value = selection
+  copyViewOpen.value = true
+  toolsMessage.value = '无法访问剪贴板，请从文本视图使用系统复制'
+}
+
+function openCopyView(): void {
+  toolsMessage.value = ''
+  const buffer = terminalInstance?.buffer.active
+  if (!buffer) {
+    toolsMessage.value = '当前没有可复制的终端文本'
+    return
+  }
+  copyText.value = getBufferText(buffer)
+  copyViewOpen.value = true
+}
+
+function closeCopyView(): void {
+  toolsMessage.value = ''
+  copyViewOpen.value = false
+  copyText.value = ''
+}
+
+function setLocalScrollMode(enabled: boolean): void {
+  if (status.value !== 'connected' || !terminalInstance) return
+  clearLocalTouchGesture()
+  localScrollMode.value = enabled
+  if (!enabled) terminalInstance.scrollToBottom()
+}
+
+function scrollLocally(amount: number): void {
+  if (status.value === 'connected' && localScrollMode.value) terminalInstance?.scrollLines(amount)
+}
+
+function returnToBottom(): void {
+  if (status.value !== 'connected' || !terminalInstance) return
+  terminalInstance.scrollToBottom()
+  localScrollMode.value = false
+  clearLocalTouchGesture()
 }
 
 function handleShortcut(preset: ShortcutPreset): void {
@@ -181,8 +438,30 @@ defineExpose({
       <span v-if="title" class="terminal-title">{{ title }}</span>
       <span v-if="connectionError" class="terminal-error">{{ connectionError }}</span>
     </header>
-    <div v-if="!sessionName" class="terminal-empty">请选择会话</div>
-    <div v-else ref="terminalElement" class="terminal-container"></div>
+    <div class="terminal-display">
+      <div v-if="!sessionName" class="terminal-empty">请选择会话</div>
+      <div v-else ref="terminalElement" class="terminal-container" :class="{ 'is-local-scroll': localScrollMode }"></div>
+      <TerminalToolsSheet
+        v-if="sessionName"
+        :key="sessionName"
+        :connected="status === 'connected'"
+        :local-scroll-mode="localScrollMode"
+        :copy-text="copyText"
+        :copy-view-open="copyViewOpen"
+        :text-input-open="textInputOpen"
+        :message="toolsMessage"
+        @copy-selection="copySelection"
+        @paste-clipboard="pasteClipboard"
+        @open-copy-view="openCopyView"
+        @open-text-input="openTextInput"
+        @close-copy-view="closeCopyView"
+        @close-text-input="closeTextInput"
+        @send-text="sendText"
+        @toggle-local-scroll="setLocalScrollMode(!localScrollMode)"
+        @scroll-local="scrollLocally"
+        @scroll-to-bottom="returnToBottom"
+      />
+    </div>
     <ExtraKeysBar
       :key="sessionName ?? 'no-session'"
       ref="extraKeys"
@@ -203,6 +482,7 @@ defineExpose({
 
 <style scoped>
 .terminal-view {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -252,12 +532,27 @@ defineExpose({
   color: #ef9999;
 }
 
-.terminal-container,
-.terminal-empty {
+.terminal-display {
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+.terminal-container,
+.terminal-empty {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.terminal-container.is-local-scroll {
+  touch-action: none;
 }
 
 .terminal-container :deep(.xterm) {
