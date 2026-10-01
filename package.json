@@ -8,6 +8,7 @@
     "start": "pnpm --filter ./server start",
     "typecheck": "pnpm --filter ./frontend typecheck",
     "test:backend": "node --test tests/backend/*.test.cjs",
+    "test:frontend": "pnpm --filter ./frontend test",
     "verify": "pnpm build"
   }
 }
