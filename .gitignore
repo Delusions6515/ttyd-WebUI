@@ -7,6 +7,7 @@ node_modules/
 dist/
 **/dist/
 coverage/
+.vitest/
 
 # Local configuration
 .env

@@ -23,6 +23,7 @@ const status = ref<TerminalStatus>('disconnected')
 const connectionError = ref('')
 const title = ref('')
 let controller: TerminalController | undefined
+let terminalInstance: Terminal | undefined
 
 const statusText: Record<TerminalStatus, string> = {
   connecting: '连接中',
@@ -47,6 +48,7 @@ async function checkSessionAvailable(sessionName: string, signal: AbortSignal): 
 function disposeTerminal(): void {
   controller?.destroy()
   controller = undefined
+  terminalInstance = undefined
   terminalElement.value?.replaceChildren()
 }
 
@@ -72,6 +74,7 @@ function mountTerminal(): void {
       selectionBackground: '#414b5c',
     },
   })
+  terminalInstance = terminal
   const fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
@@ -98,6 +101,11 @@ watch(() => [props.sessionName, props.enabled] as const, () => {
 }, { flush: 'sync' })
 onMounted(mountTerminal)
 onBeforeUnmount(disposeTerminal)
+
+defineExpose({
+  focusTerminal: () => terminalInstance?.focus(),
+  blurTerminal: () => terminalInstance?.blur(),
+})
 </script>
 
 <template>
