@@ -145,9 +145,61 @@ TRUSTED_ORIGINS=http://192.168.1.10:3000
 
 重启服务，按需将防火墙的 3000 端口限制为可信网段，然后在手机上打开 **http://192.168.1.10:3000**。不要做公网端口转发，也不要开放内部 ttyd 端口范围。
 
-`TRUSTED_ORIGINS` 必须与浏览器地址的协议、主机和端口一致，不带路径；多个地址用逗号分隔。它只是来源校验，不是用户身份验证。使用域名或 HTTPS 网关时，填写最终的浏览器访问地址，并确保代理支持 WebSocket、保留正确的 `Host` 和 `Origin`。页面不支持 iframe 嵌入。
+`TRUSTED_ORIGINS` 可以填写完整来源地址，或下文所示的左侧单级域名通配符。浏览器地址的协议和端口必须匹配，不带路径；多个地址用逗号分隔。它只是来源校验，不是用户身份验证。使用域名或 HTTPS 网关时，填写最终的浏览器访问地址，并确保代理支持 WebSocket、保留正确的 `Host` 和 `Origin`。页面不支持 iframe 嵌入。
 
-## 7. 常见问题
+## 7. Tailscale 访问
+
+使用你自己的 tailnet DNS 后缀，可在 Tailscale 管理控制台的 DNS 页面查看。例如设备地址是 `server.tail1234.ts.net`，后缀就是 `tail1234.ts.net`。请换成实际后缀，并使用完整设备域名访问，不要只填写 MagicDNS 短名称。
+
+### 通过 Tailscale Serve 使用 HTTPS
+
+服务器和客户端都需要安装并连接 Tailscale。WebUI 保持仅监听本机，在 `.env` 中设置：
+
+```dotenv
+HOST=127.0.0.1
+PORT=3000
+TRUSTED_ORIGINS=https://*.tail1234.ts.net
+```
+
+重启 WebUI。要让 tailnet 内的设备通过 HTTPS 访问本机服务，在服务器上运行：
+
+```sh
+tailscale serve --bg http://127.0.0.1:3000
+```
+
+如果已经使用 Serve，请先检查现有配置，再修改代理路由。按提示启用 HTTPS，然后打开 Serve 显示的 HTTPS 地址，例如 `https://server.tail1234.ts.net`。通过 Tailscale 访问策略限制访问者；不要用 Funnel 将这个终端公开到互联网。
+
+HTTPS 由前面的 Serve 提供，WebUI 自身仍以 HTTP 监听 `127.0.0.1:3000`。应用不会信任转发的主机或协议请求头。前提条件和管理方式见官方 [Tailscale Serve 文档](https://tailscale.com/docs/reference/tailscale-cli/serve)。
+
+### 通过 Tailscale 网卡直接使用 HTTP
+
+也可以绑定服务器实际的 Tailscale IP，例如：
+
+```dotenv
+HOST=100.64.0.10
+PORT=3000
+TRUSTED_ORIGINS=http://*.tail1234.ts.net:3000
+```
+
+替换 IP 和后缀，重启 WebUI，然后在已连接 Tailscale、启用 MagicDNS 的客户端访问 `http://server.tail1234.ts.net:3000`。域名通配符不会放行短主机名或 IP 地址；需要时请另外添加它们的完整来源地址。Tailscale 会加密网络传输，但浏览器仍将 HTTP 页面视为不满足剪贴板 HTTPS 条件的页面。
+
+### 通配符会放行哪些地址
+
+`https://*.tail1234.ts.net` 只允许后缀前有一个 DNS 标签：
+
+| 浏览器来源地址 | 是否允许 |
+|---|---|
+| `https://server.tail1234.ts.net` | 允许 |
+| `https://other-device.tail1234.ts.net:443` | 允许；443 是 HTTPS 默认端口 |
+| `https://tail1234.ts.net` | 不允许 |
+| `https://nested.server.tail1234.ts.net` | 不允许 |
+| `https://server.another-tailnet.ts.net` | 不允许 |
+| `http://server.tail1234.ts.net` | 不允许 |
+| `https://server.tail1234.ts.net:8443` | 不允许；需要另外配置该端口 |
+
+通配符必须位于域名最左侧。不支持裸 `*`、域名中间的通配符、端口通配符或 IP 地址通配符。**不要将整个 `*.ts.net` 加入信任列表。** 通配符信任所有匹配设备的来源地址，不只当前服务器；请仅配置设备和使用者均可信的后缀。Tailscale 访问策略和来源校验不会为应用增加用户权限管理或登录页面。
+
+## 8. 常见问题
 
 ### 页面打不开
 
@@ -155,7 +207,7 @@ TRUSTED_ORIGINS=http://192.168.1.10:3000
 
 ### 提示来源或主机不允许
 
-检查 `TRUSTED_ORIGINS` 是否与地址栏中的协议、主机和端口完全一致。更改 `.env` 后重启服务；不要用通配符或关闭校验来绕过错误。
+检查地址栏中的协议、端口是否与 `TRUSTED_ORIGINS` 一致，主机名是否完整匹配，或符合你配置的单级域名通配符。更改 `.env` 后重启服务；不要用裸 `*`、整个 `*.ts.net` 或关闭校验来绕过错误。
 
 ### 创建会话失败
 

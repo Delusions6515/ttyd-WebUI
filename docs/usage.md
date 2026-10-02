@@ -147,9 +147,61 @@ TRUSTED_ORIGINS=http://192.168.1.10:3000
 
 Restart the service, restrict firewall access to port 3000 to the trusted network as needed, then open **http://192.168.1.10:3000** on the phone. Do not configure public port forwarding or expose the internal ttyd port range.
 
-`TRUSTED_ORIGINS` must match the browser URL's scheme, host, and port, with no path. Separate multiple origins with commas. This is an origin check, not user authentication. With a domain name or HTTPS gateway, use the final browser-facing origin and ensure the proxy supports WebSocket and preserves the correct `Host` and `Origin`. The page does not support iframe embedding.
+`TRUSTED_ORIGINS` accepts exact origins or a leftmost single-label domain wildcard, as shown below. The browser URL's scheme and port must match, and no path is allowed. Separate multiple origins with commas. This is an origin check, not user authentication. With a domain name or HTTPS gateway, use the final browser-facing origin and ensure the proxy supports WebSocket and preserves the correct `Host` and `Origin`. The page does not support iframe embedding.
 
-## 7. Troubleshooting
+## 7. Tailscale access
+
+Use your own tailnet DNS suffix, found on the DNS page of the Tailscale admin console. For example, if the device address is `server.tail1234.ts.net`, use `tail1234.ts.net` as the suffix. Replace this example with your actual suffix, and open the full device domain rather than its short MagicDNS name.
+
+### HTTPS through Tailscale Serve
+
+With Tailscale installed and connected on the server and client, keep the WebUI listener on loopback. Set `.env` to:
+
+```dotenv
+HOST=127.0.0.1
+PORT=3000
+TRUSTED_ORIGINS=https://*.tail1234.ts.net
+```
+
+Restart WebUI. To make this local service available over HTTPS within the tailnet, run on the server:
+
+```sh
+tailscale serve --bg http://127.0.0.1:3000
+```
+
+If you already use Serve, check your existing configuration before changing its routes. Follow any prompts to enable HTTPS, then open the HTTPS address shown by Serve, for example `https://server.tail1234.ts.net`. Keep access restricted with your Tailscale access policy. Do not use Funnel to make this terminal publicly accessible.
+
+Serve handles HTTPS in front of WebUI; the application itself still listens on HTTP at `127.0.0.1:3000`. The app does not trust forwarded host/protocol headers. See the official [Tailscale Serve documentation](https://tailscale.com/docs/reference/tailscale-cli/serve) for prerequisites and administration.
+
+### Direct HTTP through the Tailscale interface
+
+Alternatively, bind to the server's actual Tailscale IP. For example:
+
+```dotenv
+HOST=100.64.0.10
+PORT=3000
+TRUSTED_ORIGINS=http://*.tail1234.ts.net:3000
+```
+
+Replace the IP and suffix, restart WebUI, and open `http://server.tail1234.ts.net:3000` from a connected client with MagicDNS enabled. The wildcard does not allow access by a short hostname or IP address; add those as separate exact origins if you need them. Tailscale encrypts network traffic, but an HTTP page still does not satisfy browser HTTPS requirements for clipboard features.
+
+### What the wildcard allows
+
+`https://*.tail1234.ts.net` allows exactly one DNS label before the suffix:
+
+| Browser origin | Allowed? |
+|---|---|
+| `https://server.tail1234.ts.net` | Yes |
+| `https://other-device.tail1234.ts.net:443` | Yes; 443 is the default HTTPS port |
+| `https://tail1234.ts.net` | No |
+| `https://nested.server.tail1234.ts.net` | No |
+| `https://server.another-tailnet.ts.net` | No |
+| `http://server.tail1234.ts.net` | No |
+| `https://server.tail1234.ts.net:8443` | No; configure that port separately |
+
+The wildcard must be at the beginning of a DNS name. A bare `*`, wildcards in the middle, wildcard ports, and wildcard IP addresses are not supported. **Do not trust all of `*.ts.net`.** A wildcard trusts origins from all matching devices, not just this server. Only configure a suffix whose devices and users you trust. Tailscale access policies and origin checks do not add application-level user permissions or a login screen.
+
+## 8. Troubleshooting
 
 ### The page will not open
 
@@ -157,7 +209,7 @@ Check that `pnpm start` is still running and read errors in its terminal. The de
 
 ### Host or origin is not allowed
 
-Check that `TRUSTED_ORIGINS` exactly matches the address bar's scheme, host, and port. Restart after editing `.env`. Do not work around the error with a wildcard or by disabling validation.
+Check that the address bar's scheme and port match `TRUSTED_ORIGINS`, and that the hostname either matches exactly or fits your configured single-label wildcard. Restart after editing `.env`. Do not work around the error with a bare `*`, all of `*.ts.net`, or by disabling validation.
 
 ### A session cannot be created
 

@@ -33,6 +33,88 @@ function fakeManager(sessions) {
   return manager;
 }
 
+test('tailnet wildcard validation is shared by HTTP, metadata WebSocket and terminal WebSocket', async (t) => {
+  const upstream = responseServer((req, res) => {
+    assert.equal(req.headers.authorization, 'Basic private-upstream');
+    res.end('terminal');
+  });
+  const upstreamWss = new WebSocketServer({ noServer: true });
+  upstream.on('upgrade', (req, socket, head) => {
+    assert.equal(req.headers.authorization, 'Basic private-upstream');
+    upstreamWss.handleUpgrade(req, socket, head, (ws) => ws.on('message', (data) => ws.send(data)));
+  });
+  const upstreamPort = await listen(upstream);
+  const app = createApp({
+    sessionManager: fakeManager([{ name: 'term', status: 'running', port: upstreamPort, upstreamAuthorization: 'Basic private-upstream' }]),
+    trustedOrigins: ['https://*.tail1234.ts.net'],
+    host: '127.0.0.1',
+  });
+  const port = await listen(app.server);
+  t.after(async () => {
+    await app.close();
+    upstreamWss.close();
+    await close(upstream);
+  });
+
+  async function requestHttp(path, headers) {
+    return new Promise((resolve, reject) => {
+      const request = http.request({ hostname: '127.0.0.1', port, path, headers }, (response) => {
+        let body = '';
+        response.on('data', (chunk) => { body += chunk.toString(); });
+        response.once('end', () => resolve({ status: response.statusCode, body }));
+        response.once('error', reject);
+      });
+      request.once('error', reject);
+      request.end();
+    });
+  }
+
+  async function upgrade(path, headers, expectedStatus) {
+    return new Promise((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers, handshakeTimeout: 3000 });
+      socket.once('open', () => {
+        if (expectedStatus === 101) resolve(socket);
+        else { socket.terminate(); reject(new Error('untrusted upgrade opened')); }
+      });
+      socket.once('unexpected-response', (_request, response) => {
+        response.resume();
+        socket.terminate();
+        if (response.statusCode === expectedStatus) resolve(null);
+        else reject(new Error(`unexpected upgrade status: ${response.statusCode}`));
+      });
+      socket.once('error', reject);
+    });
+  }
+
+  const allowed = { Host: 'server.tail1234.ts.net', Origin: 'https://server.tail1234.ts.net' };
+  assert.equal((await requestHttp('/api/sessions', allowed)).status, 200);
+  assert.equal((await requestHttp('/terminal/term/token', allowed)).body, 'terminal');
+  const metadata = await upgrade('/ws', allowed, 101);
+  metadata.close();
+  const terminal = await upgrade('/terminal/term/ws', allowed, 101);
+  const echoed = new Promise((resolve, reject) => {
+    terminal.once('message', (data) => resolve(data.toString()));
+    terminal.once('error', reject);
+  });
+  terminal.send('wildcard-input');
+  assert.equal(await echoed, 'wildcard-input');
+  terminal.close();
+
+  for (const headers of [
+    { ...allowed, Origin: 'http://server.tail1234.ts.net' },
+    { ...allowed, Origin: 'https://server.tail1234.ts.net:8443' },
+    { Host: 'nested.server.tail1234.ts.net', Origin: 'https://nested.server.tail1234.ts.net' },
+    { Host: 'server.tail1234.ts.net.evil.test', Origin: 'https://server.tail1234.ts.net.evil.test' },
+    { ...allowed, Host: 'evil.test', 'X-Forwarded-Host': allowed.Host },
+  ]) {
+    for (const path of ['/api/sessions', '/terminal/term/token']) {
+      assert.equal((await requestHttp(path, headers)).status, 403, `${path}: ${JSON.stringify(headers)}`);
+    }
+    await upgrade('/ws', headers, 403);
+    await upgrade('/terminal/term/ws', headers, 403);
+  }
+});
+
 test('HTTP proxy preserves ttyd base paths and routes each session to its own port', async (t) => {
   const seen = [];
   const upstreams = [
