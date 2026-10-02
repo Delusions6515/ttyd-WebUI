@@ -16,6 +16,17 @@ export interface KeyEncodingOptions {
   modifiers?: readonly TerminalModifier[]
 }
 
+const cursorFinals: Readonly<Partial<Record<TerminalKey, string>>> = {
+  UP: 'A', DOWN: 'B', RIGHT: 'C', LEFT: 'D', HOME: 'H', END: 'F',
+}
+
+const functionKeys: Readonly<Partial<Record<TerminalKey, Readonly<{ ss3: string; tilde?: number }>>>> = {
+  F1: { ss3: 'P' }, F2: { ss3: 'Q' }, F3: { ss3: 'R' }, F4: { ss3: 'S' },
+  F5: { ss3: '', tilde: 15 }, F6: { ss3: '', tilde: 17 }, F7: { ss3: '', tilde: 18 },
+  F8: { ss3: '', tilde: 19 }, F9: { ss3: '', tilde: 20 }, F10: { ss3: '', tilde: 21 },
+  F11: { ss3: '', tilde: 23 }, F12: { ss3: '', tilde: 24 },
+}
+
 function modifierParameter(modifiers: readonly TerminalModifier[]): number {
   return 1 + (modifiers.includes('alt') ? 2 : 0) + (modifiers.includes('ctrl') ? 4 : 0)
 }
@@ -31,10 +42,6 @@ function modifiedTilde(code: number, modifiers: readonly TerminalModifier[]): st
 export function encodeKey(key: TerminalKey, options: KeyEncodingOptions): string {
   const modifiers = options.modifiers ?? []
   const modified = modifiers.length > 0
-  const cursorFinals: Partial<Record<TerminalKey, string>> = {
-    UP: 'A', DOWN: 'B', RIGHT: 'C', LEFT: 'D', HOME: 'H', END: 'F',
-  }
-
   if (key === 'ESC') return encodeText('\u001b', modifiers)
   if (key === 'TAB') return '\t'
 
@@ -52,12 +59,6 @@ export function encodeKey(key: TerminalKey, options: KeyEncodingOptions): string
     return modifiers.includes('ctrl') ? modifiedTilde(code, modifiers) : `\u001b[${code}~`
   }
 
-  const functionKeys: Record<string, { ss3: string; tilde?: number }> = {
-    F1: { ss3: 'P' }, F2: { ss3: 'Q' }, F3: { ss3: 'R' }, F4: { ss3: 'S' },
-    F5: { ss3: '', tilde: 15 }, F6: { ss3: '', tilde: 17 }, F7: { ss3: '', tilde: 18 },
-    F8: { ss3: '', tilde: 19 }, F9: { ss3: '', tilde: 20 }, F10: { ss3: '', tilde: 21 },
-    F11: { ss3: '', tilde: 23 }, F12: { ss3: '', tilde: 24 },
-  }
   const functionKey = functionKeys[key]
   if (functionKey) {
     if (functionKey.tilde !== undefined) {

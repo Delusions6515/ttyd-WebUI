@@ -84,9 +84,10 @@ export const sessionApi: SessionApi = {
     return parseShellList(await requestJson('/api/sessions/shells'))
   },
   async createSession(name, shell) {
+    const trimmedName = name.trim()
     const response = await requestJson('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify({ ...(name.trim() ? { name: name.trim() } : {}), shell }),
+      body: JSON.stringify({ ...(trimmedName ? { name: trimmedName } : {}), shell }),
     })
     return parseSession(response)
   },

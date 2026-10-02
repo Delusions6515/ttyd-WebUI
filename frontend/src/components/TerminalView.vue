@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
+import { TERMINAL_STATUS_LABELS as statusText } from '../terminal/status-labels'
 import ExtraKeysBar from './ExtraKeysBar.vue'
 import TerminalToolsSheet from './TerminalToolsSheet.vue'
 import { TerminalInputController } from '../terminal/input-controller'
@@ -69,16 +70,6 @@ let localTouchGesture: LocalTouchGesture | undefined
 let controller: TerminalController | undefined
 let inputController: TerminalInputController | undefined
 let terminalInstance: Terminal | undefined
-
-const statusText: Record<TerminalStatus, string> = {
-  connecting: '连接中',
-  connected: '已连接',
-  reconnecting: '重连中',
-  disconnected: '已断开',
-  stopped: '会话已停止',
-  disposed: '会话已删除',
-  error: '连接失败',
-}
 
 async function checkSessionAvailable(sessionName: string, signal: AbortSignal): Promise<SessionAvailability> {
   try {

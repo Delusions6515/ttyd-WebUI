@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_PREFERENCES } from '../stores/preferences'
+import { copyPreferences, DEFAULT_PREFERENCES } from '../stores/preferences'
 import type { PreferencesSnapshot } from '../stores/preferences'
 import SettingsSheet from './SettingsSheet.vue'
 
 function copyDefaults(): PreferencesSnapshot {
-  return JSON.parse(JSON.stringify(DEFAULT_PREFERENCES)) as PreferencesSnapshot
+  return copyPreferences(DEFAULT_PREFERENCES)
 }
 
 describe('SettingsSheet', () => {

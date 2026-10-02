@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { TERMINAL_STATUS_LABELS as terminalStatusLabels } from '../terminal/status-labels'
 import SessionActions from './SessionActions.vue'
 import type { Session, SessionAction, TerminalConnectionStatus, SessionStatus, Shell } from '../types/session'
 
@@ -37,15 +38,6 @@ const sessionStatusLabels: Record<SessionStatus, string> = {
   stopped: 'Stopped',
 }
 
-const terminalStatusLabels: Record<TerminalConnectionStatus, string> = {
-  connecting: '连接中',
-  connected: '已连接',
-  reconnecting: '重连中',
-  disconnected: '已断开',
-  stopped: '会话已停止',
-  disposed: '会话已删除',
-  error: '连接失败',
-}
 </script>
 
 <template>
