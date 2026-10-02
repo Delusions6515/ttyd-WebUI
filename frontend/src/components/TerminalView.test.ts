@@ -112,9 +112,12 @@ const terminalHarness = vi.hoisted(() => {
   return { terminals, controllers, PublicTerminalMock, PublicTerminalControllerMock }
 })
 
+const sessionApiMock = vi.hoisted(() => ({ scrollSession: vi.fn() }))
+
 vi.mock('@xterm/xterm', () => ({ Terminal: terminalHarness.PublicTerminalMock }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit(): void {} } }))
 vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }))
+vi.mock('../api/sessions', () => ({ sessionApi: sessionApiMock }))
 vi.mock('../terminal/terminal-controller', () => ({
   TerminalController: terminalHarness.PublicTerminalControllerMock,
   sessionAvailabilityFromSnapshot: () => ({ state: 'unknown' }),
@@ -123,6 +126,8 @@ vi.mock('../terminal/terminal-controller', () => ({
 beforeEach(() => {
   terminalHarness.terminals.length = 0
   terminalHarness.controllers.length = 0
+  sessionApiMock.scrollSession.mockReset()
+  sessionApiMock.scrollSession.mockResolvedValue({ name: 'stub', shell: 'bash', status: 'running', port: 1, pid: null, createdAt: '2026-10-01T00:00:00.000Z' })
 })
 
 afterEach(() => {
@@ -141,8 +146,12 @@ function setClipboard(
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise })
-  return { promise, resolve }
+  let reject!: (reason: Error) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 
 interface TestTouch {
@@ -180,6 +189,8 @@ describe('TerminalView virtual input seam', () => {
     await nextTick()
     expect(controller.fontSizes).toEqual([19])
     expect(wrapper.findAll('.extra-key-row').map((row) => row.text())).toEqual(['RUN', 'F12'])
+    expect(wrapper.find('.extra-key-more').exists()).toBe(false)
+    expect(wrapper.find('.extra-key-expanded').exists()).toBe(false)
     wrapper.unmount()
   })
   it('exposes the terminal tools entry point for touch copy, paste and local scrolling', async () => {
@@ -285,10 +296,10 @@ describe('TerminalView virtual input seam', () => {
     expect(document.activeElement).toBe(terminal.textarea)
     expect(controller.sentInputs).toEqual(['\u001b[A', '/'])
 
-    await wrapper.find('button.extra-key-more').trigger('pointerdown')
-    await wrapper.find('button.extra-key-more').trigger('click')
-    await wrapper.find('button[aria-label="Ctrl+C"]').trigger('pointerdown')
-    await wrapper.find('button[aria-label="Ctrl+C"]').trigger('click')
+    await wrapper.find('button[aria-label="终端工具"]').trigger('pointerdown')
+    await wrapper.find('button[aria-label="终端工具"]').trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === 'Ctrl+C')!.trigger('pointerdown')
+    await wrapper.findAll('button').find((button) => button.text() === 'Ctrl+C')!.trigger('click')
     expect(controller.sentInputs).toEqual(['\u001b[A', '/', '\u0003'])
     expect(terminal.focusCalls).toBe(0)
     expect(document.activeElement).toBe(terminal.textarea)
@@ -419,83 +430,127 @@ describe('TerminalView virtual input seam', () => {
     wrapper.unmount()
   })
 
-  it('captures local touch drags, resets cancellation and forwards gestures when local mode is off', async () => {
+  it('does not give the terminal focus when a modifier clears, so tapping a key cannot raise the keyboard', async () => {
     const wrapper = mount(TerminalView, {
       attachTo: document.body,
-      props: { sessionName: 'touch_scroll_shell', enabled: true },
+      props: { sessionName: 'modifier_focus_shell', enabled: true },
     })
     await nextTick()
     const terminal = terminalHarness.terminals[0]!
     const controller = terminalHarness.controllers[0]!
-    const surface = terminal.textarea!
-    const receivedByTerminal: string[] = []
-    for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
-      surface.addEventListener(type, () => receivedByTerminal.push(type))
-    }
+    // Nothing is focused yet: the reader has not touched the terminal.
+    expect(document.activeElement).not.toBe(terminal.textarea)
 
-    surface.dispatchEvent(touchEvent('touchstart', [{ identifier: 7, clientY: 100 }]))
-    surface.dispatchEvent(touchEvent('touchmove', [{ identifier: 7, clientY: 80 }]))
-    expect(receivedByTerminal).toEqual(['touchstart', 'touchmove'])
-    expect(terminal.scrollCalls).toEqual([])
+    await wrapper.find('button[aria-label="CTRL"]').trigger('click')
+    expect(document.activeElement).toBe(wrapper.find('input[aria-label="虚拟 Ctrl/Alt 组合输入"]').element)
+    terminal.focusCalls = 0
 
-    await wrapper.find('button[aria-label="终端工具"]').trigger('click')
-    await wrapper.findAll('button').find((button) => button.text() === '开始本地滚屏')!.trigger('click')
-    const start = touchEvent('touchstart', [{ identifier: 8, clientY: 100 }])
-    const move = touchEvent('touchmove', [{ identifier: 8, clientY: 80 }])
-    surface.dispatchEvent(start)
-    surface.dispatchEvent(move)
-    expect(start.defaultPrevented).toBe(true)
-    expect(move.defaultPrevented).toBe(true)
-    expect(receivedByTerminal).toEqual(['touchstart', 'touchmove'])
-    expect(terminal.scrollCalls).toEqual([1])
+    // Releasing the modifier must not hand focus to the terminal on a touch device.
+    await wrapper.find('button[aria-label="CTRL"]').trigger('click')
+    expect(document.activeElement).not.toBe(terminal.textarea)
+    expect(terminal.focusCalls).toBe(0)
 
-    const cancel = touchEvent('touchcancel', [], [{ identifier: 8, clientY: 80 }])
-    surface.dispatchEvent(cancel)
-    surface.dispatchEvent(touchEvent('touchmove', [{ identifier: 8, clientY: 40 }]))
-    surface.dispatchEvent(touchEvent('touchstart', [{ identifier: 8, clientY: 100 }]))
-    surface.dispatchEvent(touchEvent('touchend', [], [{ identifier: 8, clientY: 100 }]))
-    surface.dispatchEvent(touchEvent('touchmove', [{ identifier: 8, clientY: 60 }]))
-    expect(terminal.scrollCalls).toEqual([1])
-    expect(receivedByTerminal).toEqual(['touchstart', 'touchmove'])
-
-    surface.dispatchEvent(touchEvent('touchstart', [{ identifier: 9, clientY: 100 }]))
-    controller.setState('disconnected')
-    controller.setState('connected')
-    await nextTick()
-    await wrapper.findAll('button').find((button) => button.text() === '开始本地滚屏')!.trigger('click')
-    surface.dispatchEvent(touchEvent('touchmove', [{ identifier: 9, clientY: 50 }]))
-    expect(terminal.scrollCalls).toEqual([1])
-
-    surface.dispatchEvent(touchEvent('touchstart', [{ identifier: 10, clientY: 100 }]))
-    await wrapper.findAll('button').find((button) => button.text() === '返回底部')!.trigger('click')
-    const inactiveMove = touchEvent('touchmove', [{ identifier: 10, clientY: 30 }])
-    surface.dispatchEvent(inactiveMove)
-    expect(inactiveMove.defaultPrevented).toBe(false)
-    expect(receivedByTerminal.at(-1)).toBe('touchmove')
-    expect(terminal.scrollCalls).toEqual([1])
-
-    await wrapper.findAll('button').find((button) => button.text() === '开始本地滚屏')!.trigger('click')
-    surface.dispatchEvent(touchEvent('touchstart', [{ identifier: 11, clientY: 100 }]))
-    await wrapper.setProps({ sessionName: 'touch_scroll_next' })
-    await vi.waitFor(() => expect(terminalHarness.terminals).toHaveLength(2))
-    surface.dispatchEvent(touchEvent('touchmove', [{ identifier: 11, clientY: 40 }]))
-    expect(terminal.scrollCalls).toEqual([1])
-
-    const nextTerminal = terminalHarness.terminals[1]!
-    const nextSurface = nextTerminal.textarea!
-    await wrapper.find('button[aria-label="终端工具"]').trigger('click')
-    await wrapper.findAll('button').find((button) => button.text() === '开始本地滚屏')!.trigger('click')
-    nextSurface.dispatchEvent(touchEvent('touchstart', [{ identifier: 12, clientY: 100 }]))
-    wrapper.unmount()
-    nextSurface.dispatchEvent(touchEvent('touchmove', [{ identifier: 12, clientY: 40 }]))
-    expect(nextTerminal.scrollCalls).toEqual([])
+    // A tap on the terminal itself still keeps focus when the modifier clears.
+    terminal.focus()
+    terminal.focusCalls = 0
+    await wrapper.find('button[aria-label="CTRL"]').trigger('click')
+    await wrapper.find('button[aria-label="CTRL"]').trigger('click')
+    expect(terminal.focusCalls).toBe(1)
+    expect(document.activeElement).toBe(terminal.textarea)
     expect(controller.sentInputs).toEqual([])
+    wrapper.unmount()
   })
 
-  it('keeps copy snapshots frozen and local history scrolling out of the input path', async () => {
+  it('drives tmux scroll through the API without synthesizing terminal input', async () => {
     const wrapper = mount(TerminalView, {
       attachTo: document.body,
-      props: { sessionName: 'scroll_shell', enabled: true },
+      props: { sessionName: 'tmux_scroll_shell', enabled: true },
+    })
+    await nextTick()
+    const controller = terminalHarness.controllers[0]!
+    await wrapper.find('button[aria-label="终端工具"]').trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === '向上滚动')!.trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === '向下滚动')!.trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === '返回底部')!.trigger('click')
+    expect(sessionApiMock.scrollSession.mock.calls).toEqual([
+      ['tmux_scroll_shell', 'up', 20],
+      ['tmux_scroll_shell', 'down', 20],
+      ['tmux_scroll_shell', 'bottom', undefined],
+    ])
+    expect(controller.sentInputs).toEqual([])
+    expect(terminalHarness.terminals[0]!.wheelHandler).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('fences tmux scroll replies across session and generation changes and surfaces failures', async () => {
+    const pending = deferred<void>()
+    sessionApiMock.scrollSession.mockReturnValueOnce(pending.promise)
+    const wrapper = mount(TerminalView, {
+      attachTo: document.body,
+      props: { sessionName: 'scroll_owner', enabled: true },
+    })
+    await nextTick()
+    await wrapper.find('button[aria-label="终端工具"]').trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === '向上滚动')!.trigger('click')
+    expect(sessionApiMock.scrollSession).toHaveBeenCalledWith('scroll_owner', 'up', 20)
+
+    await wrapper.setProps({ sessionName: 'scroll_other' })
+    await vi.waitFor(() => expect(terminalHarness.terminals).toHaveLength(2))
+    pending.resolve(undefined)
+    await Promise.resolve()
+    expect(wrapper.text()).not.toContain('会话连接已变化')
+
+    sessionApiMock.scrollSession.mockRejectedValueOnce(new Error('Scroll direction must be one of up, down or bottom'))
+    await wrapper.find('button[aria-label="终端工具"]').trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === '返回底部')!.trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Scroll direction must be one of up, down or bottom'))
+    wrapper.unmount()
+  })
+
+  it.each(['switch', 'reconnect', 'unmount'])('drops queued tmux scrolls after %s instead of replaying stale gestures', async (change) => {
+    const pending = deferred<void>()
+    sessionApiMock.scrollSession.mockReturnValueOnce(pending.promise)
+    const wrapper = mount(TerminalView, {
+      props: { sessionName: 'scroll_old', enabled: true },
+    })
+    await nextTick()
+    const surface = wrapper.get('.terminal-container').element
+    surface.dispatchEvent(new WheelEvent('wheel', { deltaY: -54, bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(sessionApiMock.scrollSession).toHaveBeenCalledTimes(1))
+    surface.dispatchEvent(new WheelEvent('wheel', { deltaY: -54, bubbles: true, cancelable: true }))
+    if (change === 'switch') await wrapper.setProps({ sessionName: 'scroll_new' })
+    else if (change === 'reconnect') {
+      terminalHarness.controllers[0]!.setState('disconnected')
+      terminalHarness.controllers[0]!.setState('connected')
+    } else wrapper.unmount()
+    pending.resolve(undefined)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(sessionApiMock.scrollSession).toHaveBeenCalledTimes(1)
+    if (change !== 'unmount') wrapper.unmount()
+  })
+
+  it('drops a failed tmux scroll reply after the session disconnects', async () => {
+    const pending = deferred<never>()
+    sessionApiMock.scrollSession.mockReturnValueOnce(pending.promise)
+    const wrapper = mount(TerminalView, {
+      attachTo: document.body,
+      props: { sessionName: 'scroll_disconnect', enabled: true },
+    })
+    await nextTick()
+    await wrapper.find('button[aria-label="终端工具"]').trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === '向下滚动')!.trigger('click')
+    terminalHarness.controllers[0]!.setState('disconnected')
+    pending.reject(new Error('late tmux failure'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(wrapper.text()).not.toContain('late tmux failure')
+    wrapper.unmount()
+  })
+
+  it('keeps copy snapshots frozen while wheel and swipe drive tmux history', async () => {
+    const wrapper = mount(TerminalView, {
+      attachTo: document.body,
+      props: { sessionName: 'snapshot_shell', enabled: true },
     })
     await nextTick()
     const terminal = terminalHarness.terminals[0]!
@@ -508,14 +563,23 @@ describe('TerminalView virtual input seam', () => {
     expect((snapshot.element as HTMLTextAreaElement).value).toBe('snapshot')
     await wrapper.find('button[aria-label="关闭复制视图"]').trigger('click')
 
-    await wrapper.findAll('button').find((button) => button.text() === '开始本地滚屏')!.trigger('click')
-    expect(terminal.wheelHandler?.(new WheelEvent('wheel', { deltaY: 24 }))).toBe(false)
-    expect(terminal.scrollCalls).toEqual([3])
-    expect(controller.sentInputs).toEqual([])
-    await wrapper.findAll('button').find((button) => button.text() === '返回底部')!.trigger('click')
-    expect(terminal.bottomCalls).toBe(1)
-    expect(terminal.wheelHandler?.(new WheelEvent('wheel', { deltaY: 24 }))).toBe(true)
-    expect(terminal.scrollCalls).toEqual([3])
+    expect(wrapper.find('.terminal-container').classes()).not.toContain('is-local-scroll')
+
+    // Capture on the container even when a nested xterm listener swallows wheel events.
+    const surface = wrapper.get('.terminal-container').element
+    const nestedHandler = vi.fn((event: Event) => event.stopPropagation())
+    terminal.textarea!.addEventListener('wheel', nestedHandler)
+    const wheel = new WheelEvent('wheel', { deltaY: -54, bubbles: true, cancelable: true })
+    terminal.textarea!.dispatchEvent(wheel)
+    expect(wheel.defaultPrevented).toBe(true)
+    expect(nestedHandler).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(sessionApiMock.scrollSession).toHaveBeenCalledWith('snapshot_shell', 'up', 3))
+    // Dragging the finger downward asks for older history, matching tmux copy-mode up.
+    surface.dispatchEvent(touchEvent('touchstart', [{ identifier: 4, clientY: 364 }]))
+    surface.dispatchEvent(touchEvent('touchmove', [{ identifier: 4, clientY: 400 }]))
+    await vi.waitFor(() => expect(sessionApiMock.scrollSession).toHaveBeenCalledWith('snapshot_shell', 'up', 2))
+    surface.dispatchEvent(touchEvent('touchend', [], [{ identifier: 4, clientY: 400 }]))
+
     expect(controller.sentInputs).toEqual([])
     expect(terminal.pasteCalls).toEqual([])
     wrapper.unmount()

@@ -14,6 +14,8 @@ import { DEFAULT_KEY_ROWS } from '../terminal/key-definitions'
 import type { ShortcutPreset, ToolbarKey } from '../terminal/key-definitions'
 import type { TerminalKey, TerminalModifier } from '../terminal/key-encoder'
 import { canReadClipboardText, readClipboardText, writeClipboardText } from '../composables/useClipboard'
+import { sessionApi } from '../api/sessions'
+import type { ScrollDirection } from '../api/sessions'
 import { TerminalController, sessionAvailabilityFromSnapshot } from '../terminal/terminal-controller'
 import type { SessionAvailability, TerminalStatus } from '../terminal/terminal-controller'
 import { getBufferText } from '../terminal/buffer-text'
@@ -41,7 +43,6 @@ const modifierState = ref<ModifierStates>({ ctrl: 'off', alt: 'off' })
 const status = ref<TerminalStatus>('disconnected')
 const connectionError = ref('')
 const title = ref('')
-const localScrollMode = ref(false)
 const textInputOpen = ref(false)
 const copyViewOpen = ref(false)
 const copyText = ref('')
@@ -51,25 +52,20 @@ interface TerminalTarget {
   inputGeneration: number
   controller: TerminalController
 }
-interface LocalTouchGesture {
-  identifier: number
-  lastY: number
-  accumulatedPixels: number
-}
-type LocalTouchListener = (event: TouchEvent) => void
-interface LocalTouchHandlers {
-  surface: HTMLElement
-  start: LocalTouchListener
-  move: LocalTouchListener
-  end: LocalTouchListener
-  cancel: LocalTouchListener
-}
 let textTarget: TerminalTarget | undefined
-let localTouchHandlers: LocalTouchHandlers | undefined
-let localTouchGesture: LocalTouchGesture | undefined
 let controller: TerminalController | undefined
 let inputController: TerminalInputController | undefined
 let terminalInstance: Terminal | undefined
+interface ScrollGesture {
+  identifier: number
+  lastY: number
+}
+let scrollGesture: ScrollGesture | undefined
+let scrollPixels = 0
+// Scroll requests run in order, so a fast wheel or swipe cannot reorder tmux history.
+let scrollChain: Promise<void> = Promise.resolve()
+const SCROLL_PIXELS_PER_LINE = 18
+const MAX_SCROLL_LINES = 100
 
 async function checkSessionAvailable(sessionName: string, signal: AbortSignal): Promise<SessionAvailability> {
   try {
@@ -81,87 +77,25 @@ async function checkSessionAvailable(sessionName: string, signal: AbortSignal): 
   }
 }
 
-function clearLocalTouchGesture(): void {
-  localTouchGesture = undefined
+// Tracks whether the terminal itself owned focus before a modifier moved it to the
+// composition field. Only then may focus be handed back, so tapping a toolbar key on a
+// touch device never summons the on-screen keyboard by itself.
+let terminalHadFocus = false
+
+function captureTerminalFocus(): void {
+  const active = typeof document === 'undefined' ? null : document.activeElement
+  terminalHadFocus = Boolean(active && terminalElement.value?.contains(active))
 }
 
-function stopLocalTouchEvent(event: TouchEvent): void {
-  if (!localScrollMode.value) return
-  if (event.cancelable) event.preventDefault()
-  event.stopImmediatePropagation()
-}
-
-function handleLocalTouchStart(event: TouchEvent): void {
-  if (!localScrollMode.value) return
-  stopLocalTouchEvent(event)
-  if (event.touches.length !== 1) {
-    clearLocalTouchGesture()
-    return
-  }
-  const touch = event.changedTouches[0]
-  if (!touch) return
-  localTouchGesture = { identifier: touch.identifier, lastY: touch.clientY, accumulatedPixels: 0 }
-}
-
-function handleLocalTouchMove(event: TouchEvent, terminal: Terminal): void {
-  if (!localScrollMode.value) return
-  stopLocalTouchEvent(event)
-  const gesture = localTouchGesture
-  if (!gesture || event.touches.length !== 1) {
-    clearLocalTouchGesture()
-    return
-  }
-  let changedTouch: Touch | undefined
-  for (let index = 0; index < event.changedTouches.length; index++) {
-    const touch = event.changedTouches[index]
-    if (touch?.identifier === gesture.identifier) changedTouch = touch
-  }
-  if (!changedTouch) return
-
-  gesture.accumulatedPixels += gesture.lastY - changedTouch.clientY
-  gesture.lastY = changedTouch.clientY
-  const lines = Math.trunc(gesture.accumulatedPixels / 18)
-  if (lines !== 0) {
-    gesture.accumulatedPixels -= lines * 18
-    terminal.scrollLines(lines)
-  }
-}
-
-function handleLocalTouchEnd(event: TouchEvent): void {
-  if (!localScrollMode.value) return
-  stopLocalTouchEvent(event)
-  clearLocalTouchGesture()
-}
-
-function attachLocalTouchHandlers(surface: HTMLElement, terminal: Terminal): void {
-  const handlers: LocalTouchHandlers = {
-    surface,
-    start: handleLocalTouchStart,
-    move: (event) => handleLocalTouchMove(event, terminal),
-    end: handleLocalTouchEnd,
-    cancel: handleLocalTouchEnd,
-  }
-  localTouchHandlers = handlers
-  surface.addEventListener('touchstart', handlers.start, { capture: true, passive: false })
-  surface.addEventListener('touchmove', handlers.move, { capture: true, passive: false })
-  surface.addEventListener('touchend', handlers.end, { capture: true, passive: false })
-  surface.addEventListener('touchcancel', handlers.cancel, { capture: true, passive: false })
-}
-
-function detachLocalTouchHandlers(): void {
-  if (!localTouchHandlers) return
-  const { surface, start, move, end, cancel } = localTouchHandlers
-  surface.removeEventListener('touchstart', start, true)
-  surface.removeEventListener('touchmove', move, true)
-  surface.removeEventListener('touchend', end, true)
-  surface.removeEventListener('touchcancel', cancel, true)
-  localTouchHandlers = undefined
-  clearLocalTouchGesture()
+function restoreTerminalFocus(): void {
+  if (!terminalHadFocus) return
+  // Already back inside the terminal (another handler restored it): focus() here would be a
+  // redundant call and, on a real device, an extra chance to disturb the keyboard state.
+  if (terminalElement.value?.contains(document.activeElement)) return
+  if (status.value === 'connected') terminalInstance?.focus()
 }
 
 function clearToolState(): void {
-  localScrollMode.value = false
-  clearLocalTouchGesture()
   textInputOpen.value = false
   textTarget = undefined
   copyViewOpen.value = false
@@ -171,7 +105,8 @@ function clearToolState(): void {
 
 function disposeTerminal(): void {
   status.value = 'disconnected'
-  detachLocalTouchHandlers()
+  terminalHadFocus = false
+  detachScrollHandlers()
   clearToolState()
   inputController?.destroy()
   inputController = undefined
@@ -209,12 +144,7 @@ function mountTerminal(): void {
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
   terminal.open(terminalElement.value)
-  attachLocalTouchHandlers(terminalElement.value, terminal)
-  terminal.attachCustomWheelEventHandler((event) => {
-    if (!localScrollMode.value) return true
-    if (event.deltaY !== 0) terminal.scrollLines(Math.sign(event.deltaY) * 3)
-    return false
-  })
+  attachScrollHandlers(terminalElement.value)
 
   inputController = new TerminalInputController({
     sendInput: (data) => controller?.sendVirtualInput(data) ?? false,
@@ -225,7 +155,7 @@ function mountTerminal(): void {
       modifierState.value = nextState
       if (previouslyActive && !active) {
         extraKeys.value?.blurModifierInput()
-        if (status.value === 'connected') terminalInstance?.focus()
+        restoreTerminalFocus()
       }
     },
   })
@@ -238,9 +168,9 @@ function mountTerminal(): void {
     onState: (nextStatus, error) => {
       status.value = nextStatus
       if (nextStatus !== 'connected') {
+        terminalHadFocus = false
+        endScrollTouch()
         inputController?.reset()
-        localScrollMode.value = false
-        clearLocalTouchGesture()
         textInputOpen.value = false
         textTarget = undefined
       }
@@ -252,11 +182,14 @@ function mountTerminal(): void {
 }
 
 function handleModifierToggle(modifier: TerminalModifier): void {
+  // Remember the focus owner before a modifier claims it, so a later release can hand it back.
+  if (!inputController?.hasActiveModifiers) captureTerminalFocus()
   inputController?.toggleModifier(modifier)
   focusForModifierState()
 }
 
 function handleModifierLock(modifier: TerminalModifier): void {
+  if (!inputController?.hasActiveModifiers) captureTerminalFocus()
   inputController?.lockModifier(modifier)
 }
 
@@ -264,7 +197,7 @@ function focusForModifierState(): void {
   if (inputController?.hasActiveModifiers) extraKeys.value?.focusModifierInput()
   else {
     extraKeys.value?.blurModifierInput()
-    terminalInstance?.focus()
+    restoreTerminalFocus()
   }
 }
 
@@ -393,26 +326,110 @@ function closeCopyView(): void {
   copyText.value = ''
 }
 
-function setLocalScrollMode(enabled: boolean): void {
-  if (status.value !== 'connected' || !terminalInstance) return
-  clearLocalTouchGesture()
-  localScrollMode.value = enabled
-  if (!enabled) terminalInstance.scrollToBottom()
-}
-
-function scrollLocally(amount: number): void {
-  if (status.value === 'connected' && localScrollMode.value) terminalInstance?.scrollLines(amount)
-}
-
-function returnToBottom(): void {
-  if (status.value !== 'connected' || !terminalInstance) return
-  terminalInstance.scrollToBottom()
-  localScrollMode.value = false
-  clearLocalTouchGesture()
-}
-
 function handleShortcut(preset: ShortcutPreset): void {
   inputController?.sendPreset(preset)
+}
+
+function scrollTmux(direction: ScrollDirection, lines?: number): void {
+  const target = captureConnectedTarget()
+  if (!target) return
+  toolsMessage.value = ''
+  scrollChain = scrollChain
+    .then(async () => {
+      if (!ownsTarget(target)) return
+      await sessionApi.scrollSession(target.sessionName, direction, lines)
+    })
+    .catch((error: unknown) => {
+      if (ownsTarget(target)) toolsMessage.value = error instanceof Error ? error.message : '无法滚动终端历史'
+    })
+}
+
+// delta > 0 means the reader is moving toward older output, matching tmux copy-mode up.
+function scrollByPixels(delta: number): void {
+  scrollPixels += delta
+  const lines = Math.trunc(scrollPixels / SCROLL_PIXELS_PER_LINE)
+  if (lines === 0) return
+  scrollPixels -= lines * SCROLL_PIXELS_PER_LINE
+  scrollTmux(lines > 0 ? 'up' : 'down', Math.min(Math.abs(lines), MAX_SCROLL_LINES))
+}
+
+function handleScrollTouchStart(event: TouchEvent): void {
+  if (event.touches.length !== 1) {
+    scrollGesture = undefined
+    return
+  }
+  const touch = event.changedTouches[0]
+  if (!touch) return
+  scrollGesture = { identifier: touch.identifier, lastY: touch.clientY }
+  scrollPixels = 0
+}
+
+function handleScrollTouchMove(event: TouchEvent): void {
+  const gesture = scrollGesture
+  if (!gesture || status.value !== 'connected') return
+  if (event.touches.length !== 1) {
+    endScrollTouch()
+    return
+  }
+  let changedTouch: Touch | undefined
+  for (let index = 0; index < event.changedTouches.length; index++) {
+    const touch = event.changedTouches[index]
+    if (touch?.identifier === gesture.identifier) changedTouch = touch
+  }
+  if (!changedTouch) return
+  const delta = changedTouch.clientY - gesture.lastY
+  if (delta === 0) return
+  gesture.lastY = changedTouch.clientY
+  // Keep a handled swipe out of xterm's local viewport and TUI input handlers.
+  if (event.cancelable) event.preventDefault()
+  event.stopPropagation()
+  scrollByPixels(delta)
+}
+
+function endScrollTouch(): void {
+  scrollGesture = undefined
+  scrollPixels = 0
+}
+
+function handleScrollWheel(event: WheelEvent): void {
+  if (status.value !== 'connected' || event.deltaY === 0 || event.ctrlKey) return
+  // Capture before xterm's nested viewport can consume the wheel or turn it into keys.
+  event.preventDefault()
+  event.stopPropagation()
+  scrollByPixels(Math.sign(-event.deltaY) * 3 * SCROLL_PIXELS_PER_LINE)
+}
+
+interface ScrollTouchHandlers {
+  start: (event: TouchEvent) => void
+  move: (event: TouchEvent) => void
+  end: () => void
+}
+let scrollTouchHandlers: ScrollTouchHandlers | undefined
+
+function attachScrollHandlers(surface: HTMLElement): void {
+  surface.addEventListener('wheel', handleScrollWheel, { capture: true, passive: false })
+  const handlers: ScrollTouchHandlers = {
+    start: handleScrollTouchStart,
+    move: handleScrollTouchMove,
+    end: endScrollTouch,
+  }
+  scrollTouchHandlers = handlers
+  surface.addEventListener('touchstart', handlers.start, { capture: true, passive: true })
+  surface.addEventListener('touchmove', handlers.move, { capture: true, passive: false })
+  surface.addEventListener('touchend', handlers.end, { capture: true, passive: true })
+  surface.addEventListener('touchcancel', handlers.end, { capture: true, passive: true })
+}
+
+function detachScrollHandlers(): void {
+  const handlers = scrollTouchHandlers
+  scrollTouchHandlers = undefined
+  if (!handlers || !terminalElement.value) return
+  terminalElement.value.removeEventListener('wheel', handleScrollWheel, true)
+  terminalElement.value.removeEventListener('touchstart', handlers.start, true)
+  terminalElement.value.removeEventListener('touchmove', handlers.move, true)
+  terminalElement.value.removeEventListener('touchend', handlers.end, true)
+  terminalElement.value.removeEventListener('touchcancel', handlers.end, true)
+  endScrollTouch()
 }
 
 watch(() => props.fontSize, (fontSize) => controller?.setFontSize(fontSize), { flush: 'post' })
@@ -444,12 +461,11 @@ defineExpose({
     </header>
     <div class="terminal-display">
       <div v-if="!sessionName" class="terminal-empty">请选择会话</div>
-      <div v-else ref="terminalElement" class="terminal-container" :class="{ 'is-local-scroll': localScrollMode }"></div>
+      <div v-else ref="terminalElement" class="terminal-container"></div>
       <TerminalToolsSheet
         v-if="sessionName"
         :key="sessionName"
         :connected="status === 'connected'"
-        :local-scroll-mode="localScrollMode"
         :copy-text="copyText"
         :copy-view-open="copyViewOpen"
         :text-input-open="textInputOpen"
@@ -461,9 +477,9 @@ defineExpose({
         @close-copy-view="closeCopyView"
         @close-text-input="closeTextInput"
         @send-text="sendText"
-        @toggle-local-scroll="setLocalScrollMode(!localScrollMode)"
-        @scroll-local="scrollLocally"
-        @scroll-to-bottom="returnToBottom"
+        @key="handleVirtualKey"
+        @shortcut="handleShortcut"
+        @scroll-tmux="scrollTmux"
       />
     </div>
     <ExtraKeysBar
@@ -555,10 +571,6 @@ defineExpose({
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-}
-
-.terminal-container.is-local-scroll {
-  touch-action: none;
 }
 
 .terminal-container :deep(.xterm) {

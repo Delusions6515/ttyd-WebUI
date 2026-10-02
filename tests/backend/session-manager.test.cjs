@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const os = require('node:os');
 const { PassThrough } = require('node:stream');
 const SessionManager = require('../../server/services/session-manager');
 
@@ -88,7 +89,7 @@ test('create binds ttyd to loopback, isolates tmux, and stop preserves the task'
   assert.equal(command.command, 'ttyd');
   assert.ok(command.args.includes('-i'));
   assert.ok(command.args.includes('127.0.0.1'));
-  assert.deepEqual(command.args.slice(-7), ['tmux', '-L', 'ttyd-webui-test', 'new', '-A', '-s', 'dev'].concat('/bin/sh').slice(-7));
+  assert.deepEqual(command.args.slice(-10), ['tmux', '-L', 'ttyd-webui-test', 'new', '-A', '-s', 'dev', '-c', os.homedir(), '/bin/sh']);
   assert.equal(command.spawnOptions.shell, false);
 
   const stopped = await manager.stop('dev');
@@ -96,6 +97,92 @@ test('create binds ttyd to loopback, isolates tmux, and stop preserves the task'
   assert.deepEqual(children[0].kills, ['SIGTERM']);
   assert.deepEqual(released, [created.port]);
   assert.deepEqual(harness.tmuxCalls, []);
+});
+
+test('the tmux task starts in the resolved home directory, falling back to HOME', async () => {
+  const cases = [
+    [{ home: '/home/tester', env: { PATH: '', HOME: '/ignored' } }, '/home/tester'],
+    [{ home: '', env: { PATH: '', HOME: '/from-env' } }, '/from-env'],
+    [{ home: '/explicit', env: { PATH: '', HOME: '/from-env' } }, '/explicit'],
+    [{ home: '', env: { PATH: '' } }, null],
+  ];
+  for (const [managerOptions, expected] of cases) {
+    const harness = createHarness({ managerOptions });
+    await harness.manager.create('dev', 'sh');
+    const args = harness.spawned[0].args;
+    const tmuxArgs = args.slice(args.indexOf('tmux'));
+    const startIndex = tmuxArgs.indexOf('-c');
+    assert.equal(startIndex === -1 ? null : tmuxArgs[startIndex + 1], expected, JSON.stringify(managerOptions));
+  }
+});
+
+test('scroll drives tmux copy mode on the exact owned pane target for each direction', async () => {
+  const harness = createHarness();
+  await harness.manager.create('dev', 'sh');
+  harness.tmuxCalls.length = 0;
+
+  await harness.manager.scroll('dev', { direction: 'up', lines: 5 });
+  assert.deepEqual(harness.tmuxCalls.map(({ command, args }) => [command, ...args]), [
+    ['tmux', '-L', 'ttyd-webui-test', 'copy-mode', '-e', '-t', '=dev:'],
+    ['tmux', '-L', 'ttyd-webui-test', 'send-keys', '-t', '=dev:', '-N', '5', '-X', 'scroll-up'],
+  ]);
+
+  harness.tmuxCalls.length = 0;
+  await harness.manager.scroll('dev', { direction: 'down', lines: 1 });
+  assert.deepEqual(harness.tmuxCalls.map(({ args }) => args), [
+    ['-L', 'ttyd-webui-test', 'copy-mode', '-e', '-t', '=dev:'],
+    ['-L', 'ttyd-webui-test', 'send-keys', '-t', '=dev:', '-N', '1', '-X', 'scroll-down'],
+  ]);
+
+  harness.tmuxCalls.length = 0;
+  await harness.manager.scroll('dev', { direction: 'down' });
+  assert.deepEqual(harness.tmuxCalls.map(({ args }) => args), [
+    ['-L', 'ttyd-webui-test', 'copy-mode', '-e', '-t', '=dev:'],
+    ['-L', 'ttyd-webui-test', 'send-keys', '-t', '=dev:', '-N', '5', '-X', 'scroll-down'],
+  ]);
+
+  harness.tmuxCalls.length = 0;
+  await harness.manager.scroll('dev', { direction: 'bottom' });
+  assert.deepEqual(harness.tmuxCalls.map(({ args }) => args), [
+    ['-L', 'ttyd-webui-test', 'send-keys', '-t', '=dev:', '-X', 'cancel'],
+  ]);
+
+  assert.deepEqual(harness.manager.list().map(({ name, status }) => [name, status]), [['dev', 'running']]);
+  assert.deepEqual(harness.spawned.length, 1);
+});
+
+test('scroll accepts an already live pane and rejects unknown sessions, directions and line counts', async () => {
+  const harness = createHarness();
+  await harness.manager.create('dev', 'sh');
+  harness.tmuxCalls.length = 0;
+
+  const alreadyLive = Object.assign(new Error('Command failed: tmux'), { stderr: 'not in a mode' });
+  harness.manager.execFile = (command, args, execOptions, callback) => {
+    harness.tmuxCalls.push({ command, args, execOptions });
+    setImmediate(() => callback(args.includes('cancel') ? alreadyLive : null, '', args.includes('cancel') ? 'not in a mode' : ''));
+  };
+  assert.deepEqual(await harness.manager.scroll('dev', { direction: 'bottom' }), harness.manager.list()[0]);
+
+  for (const lines of [0, -1, 101, 1.5, '5', null]) {
+    await assert.rejects(harness.manager.scroll('dev', { direction: 'up', lines }), /between 1 and 100/);
+  }
+  for (const direction of ['left', 'UP', '', undefined]) {
+    await assert.rejects(harness.manager.scroll('dev', { direction }), /direction/);
+  }
+  await assert.rejects(harness.manager.scroll('missing', { direction: 'up' }), (error) => {
+    assert.equal(error.statusCode, 404);
+    return true;
+  });
+});
+
+test('scroll surfaces tmux failures other than an already live pane', async () => {
+  const harness = createHarness();
+  await harness.manager.create('dev', 'sh');
+  harness.manager.execFile = (command, args, execOptions, callback) => {
+    harness.tmuxCalls.push({ command, args, execOptions });
+    setImmediate(() => callback(Object.assign(new Error('tmux failed'), { stderr: "can't find pane: =dev:" })));
+  };
+  await assert.rejects(harness.manager.scroll('dev', { direction: 'up' }), /tmux failed/);
 });
 
 test('new records cannot adopt preserved tmux names and automatic names skip them', async () => {

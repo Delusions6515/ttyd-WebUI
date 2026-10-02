@@ -84,6 +84,42 @@ test('real ttyd token-first WebSocket retains a tmux shell, resizes, and deletes
   await runTmux(['kill-server'], { ignoreFailure: true });
 });
 
+test('scroll drives tmux copy mode through the real managed session and leaves the task running', async (t) => {
+  const runtime = await createRuntime();
+  const name = `scroll-${process.pid}`;
+  let connection;
+  t.after(async () => {
+    await connection?.close();
+    await runtime.close();
+  });
+
+  await runtime.sessionManager.create(name, 'bash');
+  connection = await connectTerminal(runtime.origin, name);
+  connection.resize(80, 24);
+  connection.sendInput('seq 1 600\n');
+  await connection.waitForOutput('600');
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  const paneInMode = () => execFileSync(
+    'tmux',
+    ['-L', runtime.tmuxSocket, 'display-message', '-p', '-t', `=${name}:`, '#{pane_in_mode}'],
+    { encoding: 'utf8', env: process.env },
+  ).trim();
+
+  assert.equal(paneInMode(), '0', 'a healthy pane starts outside copy mode');
+  await runtime.sessionManager.scroll(name, { direction: 'up', lines: 5 });
+  assert.equal(paneInMode(), '1', 'scrolling up enters tmux copy mode');
+  await runtime.sessionManager.scroll(name, { direction: 'down', lines: 2 });
+  assert.equal(paneInMode(), '1', 'scrolling down stays in tmux copy mode');
+  await runtime.sessionManager.scroll(name, { direction: 'bottom' });
+  assert.equal(paneInMode(), '0', 'returning to the bottom leaves tmux copy mode');
+  assert.equal(runtime.sessionManager.list()[0].status, 'running', 'scrolling never stops or deletes the managed session');
+  assert.equal(hasTmuxSession(name, runtime.tmuxSocket), true, 'the managed tmux task survives tmux scrolling');
+
+  await connection.close();
+  connection = undefined;
+});
+
 test('service restart stops only managed ttyd and starts with an empty registry while tmux survives', async (t) => {
   const runtime = await createRuntime();
   const name = `restart-${process.pid}`;

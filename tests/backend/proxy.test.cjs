@@ -283,6 +283,11 @@ test('session API paths preserve their response shapes and surface failures as J
   };
   manager.stop = async (name) => { calls.push(['stop', name]); return { name, status: 'stopped' }; };
   manager.restart = async (name) => { calls.push(['restart', name]); return { name, status: 'running' }; };
+  manager.scroll = async (name, options) => {
+    calls.push(['scroll', name, options.direction, options.lines]);
+    if (options.direction === 'sideways') throw Object.assign(new Error('Scroll direction must be one of up, down or bottom'), { statusCode: 400 });
+    return { name, status: 'running' };
+  };
   manager.remove = async (name) => { calls.push(['remove', name]); return { name }; };
   manager.getSession = () => null;
 
@@ -310,12 +315,28 @@ test('session API paths preserve their response shapes and surface failures as J
 
   await fetch(`${base}/new/stop`, { method: 'POST' });
   await fetch(`${base}/new/restart`, { method: 'POST' });
+  const scrolled = await fetch(`${base}/new/scroll`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ direction: 'up', lines: 7 }),
+  });
+  assert.equal(scrolled.status, 200);
+  assert.deepEqual(await scrolled.json(), { name: 'new', status: 'running' });
+  const badScroll = await fetch(`${base}/new/scroll`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ direction: 'sideways' }),
+  });
+  assert.equal(badScroll.status, 400);
+  assert.deepEqual(await badScroll.json(), { error: 'Scroll direction must be one of up, down or bottom' });
   await fetch(`${base}/new`, { method: 'DELETE' });
   assert.deepEqual(calls, [
     ['create', 'new', 'sh'],
     ['create', 'broken', 'sh'],
     ['stop', 'new'],
     ['restart', 'new'],
+    ['scroll', 'new', 'up', 7],
+    ['scroll', 'new', 'sideways', undefined],
     ['remove', 'new'],
   ]);
 });

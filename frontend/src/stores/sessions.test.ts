@@ -21,6 +21,7 @@ function makeApi(overrides: Partial<SessionApi> = {}): SessionApi {
     createSession: vi.fn(async (name, shell) => session(name || `${shell}-1`)),
     stopSession: vi.fn(async (name) => session(name, 'stopped')),
     restartSession: vi.fn(async (name) => session(name)),
+    scrollSession: vi.fn(async (name) => session(name)),
     deleteSession: vi.fn(async (name) => ({ name })),
     ...overrides,
   }

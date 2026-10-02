@@ -1,5 +1,6 @@
 const { spawn: defaultSpawn, execFile: defaultExecFile } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const { randomBytes } = require('node:crypto');
 const net = require('node:net');
 const EventEmitter = require('node:events');
@@ -8,12 +9,22 @@ const PortManager = require('./port-manager');
 const SESSION_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 const MAX_STDERR_BYTES = 8192;
 const DEFAULT_TMUX_SOCKET = 'ttyd-webui';
+const SCROLL_DIRECTIONS = new Set(['up', 'down', 'bottom']);
+const DEFAULT_SCROLL_LINES = 5;
+const MAX_SCROLL_LINES = 100;
+const NOT_IN_COPY_MODE_RE = /not in a mode/i;
 const KNOWN_SHELLS = [
   { id: 'bash', name: 'Bash', paths: ['/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash', '/opt/homebrew/bin/bash'] },
   { id: 'zsh', name: 'Zsh', paths: ['/bin/zsh', '/usr/bin/zsh', '/usr/local/bin/zsh', '/opt/homebrew/bin/zsh'] },
   { id: 'fish', name: 'Fish', paths: ['/usr/local/bin/fish', '/opt/homebrew/bin/fish', '/usr/bin/fish'] },
   { id: 'sh', name: 'Sh', paths: ['/bin/sh', '/usr/bin/sh'] },
 ];
+
+function resolveStartingDirectory(home, env) {
+  if (typeof home === 'string' && home) return home;
+  const envHome = env?.HOME;
+  return typeof envHome === 'string' && envHome ? envHome : null;
+}
 
 function detectShells() {
   return KNOWN_SHELLS.flatMap((shell) => {
@@ -86,6 +97,7 @@ class SessionManager extends EventEmitter {
     this.waitForPort = options.waitForPort || waitForPort;
     this.startupTimeout = options.startupTimeout ?? 5000;
     this.tmuxSocket = options.tmuxSocket || process.env.TTYD_TMUX_SOCKET || DEFAULT_TMUX_SOCKET;
+    this.startDirectory = resolveStartingDirectory(options.home ?? os.homedir(), options.env ?? process.env);
     this.spawnEnv = options.env || {
       ...process.env,
       PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH || ''}`,
@@ -186,6 +198,7 @@ class SessionManager extends EventEmitter {
     const encodedCredential = Buffer.from(credential).toString('base64');
     session.upstreamAuthorization = `Basic ${encodedCredential}`;
     const tmuxArgs = ['tmux', '-L', this.tmuxSocket, 'new', '-A', '-s', session.name];
+    if (this.startDirectory) tmuxArgs.push('-c', this.startDirectory);
     if (shellPath) tmuxArgs.push(shellPath);
 
     let child;
@@ -363,6 +376,61 @@ class SessionManager extends EventEmitter {
       if (this.sessions.get(name) === session) this.sessions.delete(name);
       this.emit('session:deleted', { name });
       return { name };
+    });
+  }
+
+  scroll(name, options = {}) {
+    let request;
+    try {
+      request = this.validateScroll(options);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+
+    return this.serializeOperation(name, async () => {
+      const session = this.getSession(name);
+      const target = `=${session.name}:`;
+      if (request.direction === 'bottom') {
+        await this.execTmux(['send-keys', '-t', target, '-X', 'cancel'], { tolerateNotInMode: true });
+      } else {
+        await this.execTmux(['copy-mode', '-e', '-t', target]);
+        await this.execTmux(['send-keys', '-t', target, '-N', String(request.lines), '-X', `scroll-${request.direction}`]);
+      }
+      return this.serialize(session);
+    });
+  }
+
+  validateScroll(options) {
+    const direction = options?.direction;
+    if (!SCROLL_DIRECTIONS.has(direction)) {
+      throw setErrorStatus(new Error('Scroll direction must be one of up, down or bottom'), 400);
+    }
+    const lines = options?.lines === undefined ? DEFAULT_SCROLL_LINES : options.lines;
+    if (!Number.isInteger(lines) || lines < 1 || lines > MAX_SCROLL_LINES) {
+      throw setErrorStatus(new Error(`Scroll lines must be an integer between 1 and ${MAX_SCROLL_LINES}`), 400);
+    }
+    return { direction, lines };
+  }
+
+  execTmux(args, options = {}) {
+    return new Promise((resolve, reject) => {
+      this.execFile('tmux', ['-L', this.tmuxSocket, ...args], {
+        encoding: 'utf8',
+        timeout: 5000,
+        maxBuffer: 64 * 1024,
+        env: this.spawnEnv,
+      }, (error, _stdout, stderr) => {
+        if (!error) {
+          resolve();
+          return;
+        }
+        const message = `${error.message || ''}\n${stderr || ''}`;
+        if (options.tolerateNotInMode && NOT_IN_COPY_MODE_RE.test(message)) {
+          resolve();
+          return;
+        }
+        reject(error);
+      });
     });
   }
 
