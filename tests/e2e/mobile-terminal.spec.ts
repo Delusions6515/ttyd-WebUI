@@ -94,6 +94,14 @@ async function expectEmbeddingBlocked(context: BrowserContext, parentOrigin: str
   await page.close()
 }
 
+test('viewport requests content resizing for the on-screen keyboard', async ({ page }) => {
+  await page.goto('/')
+  // This checks the requested browser policy, not actual Android keyboard geometry.
+  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute(
+    'content', /(?:^|,\s*)interactive-widget=resizes-content(?:\s*,|\s*$)/,
+  )
+})
+
 test('mobile and desktop layouts fit their measured viewport without hiding the shortcut rows', async ({ page }) => {
   await page.goto('/')
   for (const viewport of viewports) {
