@@ -12,7 +12,6 @@ function mountTools(props: Record<string, unknown> = {}) {
   return mount(TerminalToolsSheet, {
     props: {
       connected: true,
-      localScrollMode: false,
       copyText: '',
       copyViewOpen: false,
       textInputOpen: false,
@@ -55,27 +54,43 @@ describe('TerminalToolsSheet', () => {
     wrapper.unmount()
   })
 
-  it('uses only local scroll actions and restores the bottom without key or paste actions', async () => {
+  it('uses only tmux scroll actions and restores the bottom without key or paste actions', async () => {
     const wrapper = mountTools()
     await wrapper.get('button[aria-label="终端工具"]').trigger('click')
-    await wrapper.findAll('button').find((button) => button.text() === '开始本地滚屏')!.trigger('click')
-    expect(wrapper.emitted('toggleLocalScroll')).toHaveLength(1)
-    await wrapper.setProps({ localScrollMode: true })
     await wrapper.findAll('button').find((button) => button.text() === '向上滚动')!.trigger('click')
     await wrapper.findAll('button').find((button) => button.text() === '向下滚动')!.trigger('click')
     await wrapper.findAll('button').find((button) => button.text() === '返回底部')!.trigger('click')
-    expect(wrapper.emitted('scrollLocal')).toEqual([[-10], [10]])
-    expect(wrapper.emitted('scrollToBottom')).toHaveLength(1)
+    expect(wrapper.emitted('scrollTmux')).toEqual([['up', 20], ['down', 20], ['bottom']])
+    expect(wrapper.emitted('toggleLocalScroll')).toBeUndefined()
+    expect(wrapper.emitted('scrollLocal')).toBeUndefined()
+    expect(wrapper.emitted('scrollToBottom')).toBeUndefined()
     expect(wrapper.emitted('key')).toBeUndefined()
     expect(wrapper.emitted('pasteClipboard')).toBeUndefined()
+    expect(wrapper.findAll('button').find((button) => button.text() === '开始本地滚屏')).toBeUndefined()
     wrapper.unmount()
   })
 
-  it('disables paste and scroll actions while disconnected', async () => {
-    const wrapper = mountTools({ connected: false, localScrollMode: true })
+  it('hosts the F1–F12 keys and common shortcuts that left the key bar', async () => {
+    const wrapper = mountTools()
+    await wrapper.get('button[aria-label="终端工具"]').trigger('click')
+    expect(wrapper.findAll('button[aria-label^="F"]').map((button) => button.text())).toEqual(
+      ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'],
+    )
+    await wrapper.find('button[aria-label="F12"]').trigger('click')
+    expect(wrapper.emitted('key')).toEqual([['F12']])
+    await wrapper.find('button[aria-label="Ctrl+C"]').trigger('click')
+    expect(wrapper.emitted('shortcut')).toHaveLength(1)
+    expect(wrapper.emitted('shortcut')?.[0]?.[0]).toMatchObject({ label: 'Ctrl+C', modifiers: ['ctrl'] })
+    wrapper.unmount()
+  })
+
+  it('disables paste, tmux scroll and extended keys while disconnected', async () => {
+    const wrapper = mountTools({ connected: false })
     await wrapper.get('button[aria-label="终端工具"]').trigger('click')
     expect(wrapper.findAll('button').find((button) => button.text() === '粘贴')!.element.disabled).toBe(true)
     expect(wrapper.findAll('button').find((button) => button.text() === '向上滚动')!.element.disabled).toBe(true)
+    expect((wrapper.find('button[aria-label="F12"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect((wrapper.find('button[aria-label="Ctrl+C"]').element as HTMLButtonElement).disabled).toBe(true)
     wrapper.unmount()
   })
 })

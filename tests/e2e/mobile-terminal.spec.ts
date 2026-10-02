@@ -120,6 +120,108 @@ test('mobile and desktop layouts fit their measured viewport without hiding the 
   }
 })
 
+for (const keyboardGeometry of ['visual-only', 'layout-and-visual'] as const) {
+  test(`keyboard geometry ${keyboardGeometry} keeps the shortcut bar flush with the visible viewport`, async ({ page }) => {
+    await page.addInitScript(() => {
+      const viewport = new EventTarget()
+      Object.assign(viewport, { height: 844, offsetTop: 0 })
+      Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport })
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 844 })
+    })
+    await page.goto('/')
+    await expect.poll(() => page.locator('.app-shell').evaluate((element) => element.getBoundingClientRect().height)).toBe(844)
+    await page.evaluate((geometry) => {
+      Object.assign(window.visualViewport!, { height: 520 })
+      if (geometry === 'layout-and-visual') Object.defineProperty(window, 'innerHeight', { configurable: true, value: 520 })
+      window.visualViewport!.dispatchEvent(new Event('resize'))
+      window.dispatchEvent(new Event('resize'))
+    }, keyboardGeometry)
+    await expect.poll(() => page.locator('.extra-keys-bar').evaluate((element) => element.getBoundingClientRect().bottom)).toBe(520)
+    await expect.poll(() => page.locator('.app-shell').evaluate((element) => (element as HTMLElement).style.getPropertyValue('--safe-area-bottom').trim())).toBe('0px')
+    await page.evaluate(() => {
+      Object.assign(window.visualViewport!, { height: 844 })
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 844 })
+      window.visualViewport!.dispatchEvent(new Event('resize'))
+    })
+    await expect.poll(() => page.locator('.extra-keys-bar').evaluate((element) => element.getBoundingClientRect().bottom)).toBe(844)
+    await expect.poll(() => page.locator('.app-shell').evaluate((element) => (element as HTMLElement).style.getPropertyValue('--safe-area-bottom').trim())).toBe('env(safe-area-inset-bottom, 0px)')
+  })
+}
+
+test('wheel and swipe display older tmux output without typing or pulling shortcut focus into the terminal', async ({ page }, testInfo) => {
+  await installTtydTrace(page)
+  await page.goto('/')
+  const name = uniqueName(`history-${testInfo.project.name}`)
+  const created = await page.request.post('/api/sessions', { data: { name, shell: 'bash' } })
+  expect(created.status()).toBe(201)
+  try {
+    await selectSession(page, name)
+    const nonce = Date.now().toString()
+    await sendShellLine(page, `for i in $(seq 1 300); do printf 'HIST_%s_%03d\\n' ${nonce} "$i"; done; printf 'READY_%s\\n' ${nonce}`)
+    await expect(page.locator('.xterm-rows')).toContainText(`READY_${nonce}`)
+    const firstVisibleLine = () => page.locator('.xterm-rows').evaluate((element, label) => {
+      const matches = [...(element.textContent ?? '').matchAll(new RegExp(`HIST_${label}_(\\d+)`, 'g'))]
+      return matches.length ? Math.min(...matches.map((match) => Number(match[1]))) : 0
+    }, nonce)
+    const beforeWheel = await firstVisibleLine()
+    expect(beforeWheel).toBeGreaterThan(0)
+    const tools = page.getByRole('button', { name: '终端工具', exact: true })
+    await page.getByRole('button', { name: '关闭终端工具', exact: true }).click()
+    await page.evaluate(() => {
+      const trace = (window as typeof window & { __u8TtydTrace: { input: string[] } }).__u8TtydTrace
+      trace.input.length = 0
+    })
+    const surface = page.locator('.terminal-container')
+    const bounds = await surface.boundingBox()
+    expect(bounds).not.toBeNull()
+    await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2)
+    const wheelResponse = page.waitForResponse((response) => response.url().endsWith(`/api/sessions/${name}/scroll`), { timeout: 5_000 })
+    await page.mouse.wheel(0, -120)
+    expect((await wheelResponse).ok()).toBe(true)
+    await expect.poll(firstVisibleLine).toBeLessThan(beforeWheel)
+    const afterWheel = await firstVisibleLine()
+    expect(afterWheel).toBeGreaterThan(0)
+    await surface.evaluate((element) => {
+      const dispatch = (type: string, y: number, ended = false) => {
+        const event = new Event(type, { bubbles: true, cancelable: true })
+        const touch = { identifier: 7, clientX: 100, clientY: y }
+        Object.defineProperties(event, {
+          touches: { value: ended ? [] : [touch] },
+          changedTouches: { value: [touch] },
+        })
+        element.dispatchEvent(event)
+      }
+      dispatch('touchstart', 200)
+      dispatch('touchmove', 272)
+      dispatch('touchend', 272, true)
+    })
+    await expect.poll(firstVisibleLine).toBeLessThan(afterWheel)
+    expect(await firstVisibleLine()).toBeGreaterThan(0)
+    expect(await page.evaluate(() => (window as typeof window & { __u8TtydTrace: { input: string[] } }).__u8TtydTrace.input)).toEqual([])
+
+    await tools.click()
+    await page.getByRole('button', { name: '返回底部', exact: true }).click()
+    await expect(page.locator('.xterm-rows')).toContainText(`READY_${nonce}`)
+    await page.getByRole('button', { name: '关闭终端工具', exact: true }).click()
+    await page.locator('.xterm-helper-textarea').evaluate((element) => (element as HTMLTextAreaElement).blur())
+    await page.getByRole('button', { name: '↑', exact: true }).click()
+    expect(await page.evaluate(() => document.activeElement?.closest('.terminal-container') !== null)).toBe(false)
+    await page.getByRole('button', { name: 'CTRL', exact: true }).click()
+    await expect(page.getByLabel('虚拟 Ctrl/Alt 组合输入')).toBeFocused()
+    await page.getByRole('button', { name: '←', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'CTRL', exact: true })).toHaveAttribute('data-mode', 'off')
+    expect(await page.evaluate(() => document.activeElement?.closest('.terminal-container') !== null)).toBe(false)
+    // The arrow-key checks recall/edit shell history. Cancel that line before the liveness probe.
+    await tools.click()
+    await page.getByRole('button', { name: 'Ctrl+C', exact: true }).click()
+    await sendShellLine(page, `printf '\\nHISTORY_%s_OK\\n' ${nonce}`)
+    await expect(page.locator('.xterm-rows')).toContainText(`HISTORY_${nonce}_OK`)
+  } finally {
+    const deleted = await page.request.delete(`/api/sessions/${encodeURIComponent(name)}`)
+    expect(deleted.ok()).toBe(true)
+  }
+})
+
 test('top-level app, Vite/production HTML, terminal proxy HTML and fonts are served without framing permission', async ({ page, context, baseURL }, testInfo) => {
   const application = await page.request.get('/')
   expect(application.ok()).toBeTruthy()

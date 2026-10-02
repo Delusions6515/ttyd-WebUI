@@ -34,6 +34,15 @@ module.exports = function createSessionsRouter(sessionManager) {
     }
   });
 
+  router.post('/:name/scroll', async (req, res) => {
+    try {
+      const { direction, lines } = req.body || {};
+      res.json(await sessionManager.scroll(req.params.name, { direction, lines }));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   router.post('/:name/restart', async (req, res) => {
     try {
       res.json(await sessionManager.restart(req.params.name));

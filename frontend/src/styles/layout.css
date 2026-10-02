@@ -48,7 +48,7 @@ button:disabled {
   min-width: 0;
   min-height: 0;
   padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-bottom: var(--safe-area-bottom, env(safe-area-inset-bottom, 0px));
   overflow: hidden;
   background: var(--color-canvas);
 }

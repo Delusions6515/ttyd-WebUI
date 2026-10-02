@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ModifierInput from './ModifierInput.vue'
-import { COMMON_SHORTCUTS, DEFAULT_KEY_ROWS, EXTENDED_KEYS } from '../terminal/key-definitions'
+import { DEFAULT_KEY_ROWS } from '../terminal/key-definitions'
 import type { ShortcutPreset, ToolbarKey } from '../terminal/key-definitions'
 import type { TerminalKey, TerminalModifier } from '../terminal/key-encoder'
 import type { ModifierStates } from '../terminal/input-controller'
@@ -26,7 +26,6 @@ const emit = defineEmits<{
   focusModifierInput: []
 }>()
 
-const expanded = ref(false)
 const modifierInput = ref<InstanceType<typeof ModifierInput> | null>(null)
 interface ModifierPress {
   timer: ReturnType<typeof setTimeout>
@@ -54,10 +53,6 @@ function activate(item: ToolbarKey): void {
       emit('shortcut', { label: item.label, modifiers: action.modifiers, sequence: action.sequence })
       break
   }
-}
-
-function activateShortcut(preset: ShortcutPreset): void {
-  if (props.connected) emit('shortcut', preset)
 }
 
 function onPointerDown(item: ToolbarKey, event: PointerEvent): void {
@@ -160,35 +155,6 @@ defineExpose({ focusModifierInput, blurModifierInput })
         @paste="(text, generation) => emit('paste', text, generation)"
         @hardware="(event, generation) => emit('hardware', event, generation)"
       />
-      <button type="button" class="extra-key-more" :aria-expanded="expanded" @pointerdown.prevent @click="expanded = !expanded">
-        {{ expanded ? '收起扩展键' : '更多按键' }}
-      </button>
-    </div>
-    <div v-if="expanded" class="extra-key-expanded" aria-label="扩展终端按键">
-      <div class="extra-key-row extra-key-function-row">
-        <button
-          v-for="item in EXTENDED_KEYS"
-          :key="item.ariaLabel"
-          type="button"
-          class="extra-key-button"
-          :aria-label="item.ariaLabel"
-          :disabled="!connected"
-          @pointerdown.prevent
-          @click="activate(item)"
-        >{{ item.label }}</button>
-      </div>
-      <div class="extra-key-shortcuts">
-        <button
-          v-for="preset in COMMON_SHORTCUTS"
-          :key="preset.label"
-          type="button"
-          class="extra-key-button shortcut-button"
-          :aria-label="preset.label"
-          :disabled="!connected"
-          @pointerdown.prevent
-          @click="activateShortcut(preset)"
-        >{{ preset.label }}</button>
-      </div>
     </div>
   </nav>
 </template>
@@ -217,8 +183,7 @@ defineExpose({ focusModifierInput, blurModifierInput })
   overscroll-behavior-inline: contain;
 }
 
-.extra-key-button,
-.extra-key-more {
+.extra-key-button {
   min-width: 0;
   min-height: 2.75rem;
   border: 1px solid var(--color-border);
@@ -249,8 +214,7 @@ defineExpose({ focusModifierInput, blurModifierInput })
   box-shadow: inset 0 0 0 1px var(--color-locked);
 }
 
-.extra-key-button:focus-visible,
-.extra-key-more:focus-visible {
+.extra-key-button:focus-visible {
   outline: 2px solid #84b6ff;
   outline-offset: 2px;
 }
@@ -264,34 +228,5 @@ defineExpose({ focusModifierInput, blurModifierInput })
   align-items: center;
   justify-content: flex-end;
   gap: 0.4rem;
-}
-
-.extra-key-more {
-  min-height: 2.75rem;
-  padding: 0.2rem 0.6rem;
-  color: var(--color-text-muted);
-  font-size: 0.7rem;
-}
-
-.extra-key-expanded {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  max-height: 30vh;
-  overflow: auto;
-}
-
-.extra-key-function-row {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
-.extra-key-shortcuts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-
-.shortcut-button {
-  flex: 1 1 5rem;
 }
 </style>

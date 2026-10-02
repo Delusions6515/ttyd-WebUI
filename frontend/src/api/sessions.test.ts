@@ -27,6 +27,8 @@ describe('session API', () => {
       .mockResolvedValueOnce(jsonResponse(sessionResponse('bash-1'), 201))
       .mockResolvedValueOnce(jsonResponse(sessionResponse('bash-1', 'stopped')))
       .mockResolvedValueOnce(jsonResponse(sessionResponse('bash-1')))
+      .mockResolvedValueOnce(jsonResponse(sessionResponse('bash-1')))
+      .mockResolvedValueOnce(jsonResponse(sessionResponse('bash-1')))
       .mockResolvedValueOnce(jsonResponse({ name: 'bash-1' }))
 
     expect(await sessionApi.getSessions()).toEqual([])
@@ -34,6 +36,8 @@ describe('session API', () => {
     await sessionApi.createSession('', 'bash')
     await sessionApi.stopSession('bash-1')
     await sessionApi.restartSession('bash-1')
+    await sessionApi.scrollSession('bash-1', 'up', 5)
+    await sessionApi.scrollSession('bash-1', 'bottom')
     await sessionApi.deleteSession('bash-1')
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
@@ -42,10 +46,14 @@ describe('session API', () => {
       '/api/sessions',
       '/api/sessions/bash-1/stop',
       '/api/sessions/bash-1/restart',
+      '/api/sessions/bash-1/scroll',
+      '/api/sessions/bash-1/scroll',
       '/api/sessions/bash-1',
     ])
     expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({ shell: 'bash' })
-    expect(fetchMock.mock.calls.map(([, init]) => init?.credentials)).toEqual(Array(6).fill('same-origin'))
+    expect(JSON.parse(String(fetchMock.mock.calls[5][1]?.body))).toEqual({ direction: 'up', lines: 5 })
+    expect(JSON.parse(String(fetchMock.mock.calls[6][1]?.body))).toEqual({ direction: 'bottom' })
+    expect(fetchMock.mock.calls.map(([, init]) => init?.credentials)).toEqual(Array(8).fill('same-origin'))
   })
 
   it.each([
@@ -63,8 +71,10 @@ describe('session API', () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ shells: [{ id: 'bash' }] }))
       .mockResolvedValueOnce(jsonResponse({ ...sessionResponse('alpha'), status: 'unknown' }))
+      .mockResolvedValueOnce(jsonResponse({ error: 'Scroll direction must be one of up, down or bottom' }, 400))
     await expect(sessionApi.getShells()).rejects.toThrow('Invalid shells response')
     await expect(sessionApi.stopSession('alpha')).rejects.toThrow('Invalid session response')
+    await expect(sessionApi.scrollSession('alpha', 'bottom')).rejects.toThrow('Scroll direction must be one of up, down or bottom')
   })
 
   it('preserves the last valid snapshot and selection when a 2xx payload is malformed', async () => {

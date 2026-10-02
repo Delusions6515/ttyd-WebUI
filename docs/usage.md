@@ -87,11 +87,11 @@ TAB   CTRL   ALT    ←   ↓    →    PGDN
 - **TAB** sends Tab, commonly used for shell completion.
 - **Arrow keys, HOME, END** edit a command or control a terminal program.
 - **ESC, PGUP, PGDN** send those keys. Their effect depends on the active program.
-- **更多按键** (More keys) opens F1–F12 and common shortcuts.
+- F1–F12 and common shortcuts live in the Tools panel, not in the bar, so the bar stays close to the keyboard.
 - Tap **CTRL / ALT** to enable a modifier once, then type a character or tap a toolbar key. It clears after one send. Tap again to cancel it.
 - Long-press **CTRL / ALT** to lock the modifier for repeated combinations. Tap it to unlock.
 
-For example, tap **CTRL**, then type `c` to send `Ctrl+C`, or select **Ctrl+C** under More keys. This usually interrupts the active program; it does not copy text. Use Tools to copy.
+For example, tap **CTRL**, then type `c` to send `Ctrl+C`, or open **工具** (Tools) and select **Ctrl+C** there. This usually interrupts the active program; it does not copy text. Use Tools to copy.
 
 Enabling virtual CTRL/ALT opens the **组合输入** (Combined input) field. Finish confirming an IME candidate before sending it. Chinese or multi-character commits are not forced into control characters. Paste and the long-text input preserve the original text without applying virtual modifiers. Physical keyboard Ctrl/Alt combinations use the actual pressed modifiers and do not consume the toolbar's one-shot state.
 
@@ -118,9 +118,9 @@ Clipboard features depend on permission and browser secure-context rules. Automa
 
 ### View output history
 
-In Tools, select **开始本地滚屏** (Start local scrolling). Drag the terminal to view history, or use **向上滚动 / 向下滚动** (Scroll up/down). Select **返回底部** (Return to bottom) for the latest output, then **结束本地滚屏** (End local scrolling) to return to normal terminal interaction.
+Use the mouse wheel or swipe vertically over the terminal to view tmux history. In Tools, **向上滚动 / 向下滚动** (Scroll up/down) moves 20 lines per tap, and **返回底部** (Return to bottom) returns to the latest output. All of these actions run through tmux on the server rather than the browser's local scrollback.
 
-Local scrolling moves only the browser's terminal view. It does not send arrow keys or mouse-wheel input to the server program. To scroll inside a full-screen editor or other terminal application, leave local scrolling and use that program's own controls.
+Scrolling enters tmux copy mode. **返回底部** leaves copy mode and returns to the latest output. Because this is a real tmux copy mode, the program keeps running and its own keys are not simulated; to scroll inside a full-screen editor or other terminal application, use that program's own controls.
 
 ## 5. Settings
 

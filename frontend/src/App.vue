@@ -32,6 +32,9 @@ const visibleTerminalStatus = computed<TerminalConnectionStatus>(() => (
 const appStyle = computed(() => ({
   '--visual-viewport-height': `${viewport.height.value}px`,
   '--visual-viewport-offset-top': `${viewport.offsetTop.value}px`,
+  // While the soft keyboard covers the bottom edge, its own inset replaces the
+  // home-indicator inset, so the shortcut bar can sit directly above the keyboard.
+  '--safe-area-bottom': viewport.keyboardOpen.value ? '0px' : 'env(safe-area-inset-bottom, 0px)',
 }))
 
 function selectSession(name: string): void {

@@ -2,10 +2,13 @@
 import { ref } from 'vue'
 import CopyTextSheet from './CopyTextSheet.vue'
 import TextInputSheet from './TextInputSheet.vue'
+import { COMMON_SHORTCUTS, EXTENDED_KEYS } from '../terminal/key-definitions'
+import type { ShortcutPreset, ToolbarKey } from '../terminal/key-definitions'
+import type { TerminalKey } from '../terminal/key-encoder'
+import type { ScrollDirection } from '../api/sessions'
 
 const props = defineProps<{
   connected: boolean
-  localScrollMode: boolean
   copyText: string
   copyViewOpen: boolean
   textInputOpen: boolean
@@ -20,13 +23,14 @@ const emit = defineEmits<{
   closeCopyView: []
   closeTextInput: []
   sendText: [text: string, appendEnter: boolean]
-  toggleLocalScroll: []
-  scrollLocal: [amount: number]
-  scrollToBottom: []
+  key: [key: TerminalKey]
+  shortcut: [preset: ShortcutPreset]
+  scrollTmux: [direction: ScrollDirection, lines?: number]
 }>()
 
 const expanded = ref(false)
 const localMessage = ref('')
+const TMUX_SCROLL_LINES = 20
 
 function copySelection(): void {
   localMessage.value = ''
@@ -41,6 +45,14 @@ function openCopyView(): void {
 function openTextInput(): void {
   localMessage.value = ''
   emit('openTextInput')
+}
+
+function activateExtendedKey(item: ToolbarKey): void {
+  if (props.connected && item.action.type === 'key') emit('key', item.action.key)
+}
+
+function activateShortcut(preset: ShortcutPreset): void {
+  if (props.connected) emit('shortcut', preset)
 }
 </script>
 
@@ -67,12 +79,35 @@ function openTextInput(): void {
       </div>
       <p v-if="localMessage || message" class="tools-message" role="status">{{ localMessage || message }}</p>
       <section class="scroll-tools" aria-label="终端历史滚动">
-        <button type="button" :disabled="!connected" :aria-pressed="localScrollMode" @pointerdown.prevent @click="emit('toggleLocalScroll')">
-          {{ localScrollMode ? '结束本地滚屏' : '开始本地滚屏' }}
-        </button>
-        <button type="button" :disabled="!connected || !localScrollMode" @pointerdown.prevent @click="emit('scrollLocal', -10)">向上滚动</button>
-        <button type="button" :disabled="!connected || !localScrollMode" @pointerdown.prevent @click="emit('scrollLocal', 10)">向下滚动</button>
-        <button type="button" :disabled="!connected || !localScrollMode" @pointerdown.prevent @click="emit('scrollToBottom')">返回底部</button>
+        <button type="button" :disabled="!connected" @pointerdown.prevent @click="emit('scrollTmux', 'up', TMUX_SCROLL_LINES)">向上滚动</button>
+        <button type="button" :disabled="!connected" @pointerdown.prevent @click="emit('scrollTmux', 'down', TMUX_SCROLL_LINES)">向下滚动</button>
+        <button type="button" :disabled="!connected" @pointerdown.prevent @click="emit('scrollTmux', 'bottom')">返回底部</button>
+      </section>
+      <section class="extended-keys" aria-label="扩展终端按键">
+        <div class="extended-key-row">
+          <button
+            v-for="item in EXTENDED_KEYS"
+            :key="item.ariaLabel"
+            type="button"
+            class="extended-key-button"
+            :aria-label="item.ariaLabel"
+            :disabled="!connected"
+            @pointerdown.prevent
+            @click="activateExtendedKey(item)"
+          >{{ item.label }}</button>
+        </div>
+        <div class="extended-shortcuts">
+          <button
+            v-for="preset in COMMON_SHORTCUTS"
+            :key="preset.label"
+            type="button"
+            class="extended-key-button"
+            :aria-label="preset.label"
+            :disabled="!connected"
+            @pointerdown.prevent
+            @click="activateShortcut(preset)"
+          >{{ preset.label }}</button>
+        </div>
       </section>
     </section>
     <CopyTextSheet :open="copyViewOpen" :text="copyText" @close="emit('closeCopyView')" />
@@ -151,9 +186,33 @@ function openTextInput(): void {
   gap: 0.4rem;
 }
 
-.scroll-tools {
+.scroll-tools,
+.extended-keys {
   padding-top: 0.55rem;
   border-top: 1px solid #343a45;
+}
+
+.extended-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.extended-key-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.3rem;
+}
+
+.extended-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.extended-key-button {
+  flex: 1 1 5rem;
+  min-width: 0;
 }
 
 .tools-panel button:disabled {

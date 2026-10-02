@@ -53,11 +53,19 @@ test('the browser creates, connects, stops, resumes, and confirms deletion throu
   await page.keyboard.press('Enter')
   await expect(page.locator('.xterm-rows')).toContainText('ALT:one xtwo', { timeout: 12_000 })
 
+  // Tab completion must be proven without depending on the session's working directory,
+  // which is the login home. Create a uniquely named file in a private temp dir first.
+  const tabNonce = Date.now()
+  const tabFile = `tabprobe-${tabNonce}`
+  await sendShellLine(page, `tabdir=$(mktemp -d) && cd "$tabdir" && : > ${tabFile}.md && printf '\\nTABDIR_READY\\n'`)
+  await expect(page.locator('.xterm-rows')).toContainText('TABDIR_READY', { timeout: 12_000 })
   await sendShellLine(page, "read -e answer; printf 'TAB:%s\\n' \"$answer\"")
-  await page.keyboard.type('./README')
+  await page.keyboard.type(`./${tabFile}.m`)
   await page.getByRole('button', { name: 'TAB', exact: true }).click()
   await page.keyboard.press('Enter')
-  await expect(page.locator('.xterm-rows')).toContainText('TAB:./README.md', { timeout: 12_000 })
+  await expect(page.locator('.xterm-rows')).toContainText(`TAB:./${tabFile}.md`, { timeout: 12_000 })
+  await sendShellLine(page, 'cd ~ && rm -rf "$tabdir" && printf \'\\nTABDIR_CLEANED\\n\'')
+  await expect(page.locator('.xterm-rows')).toContainText('TABDIR_CLEANED', { timeout: 12_000 })
 
   const f1Nonce = Date.now()
   const f1Result = `F1_RESULT_${f1Nonce}`
@@ -66,11 +74,13 @@ test('the browser creates, connects, stops, resumes, and confirms deletion throu
   const terminalRows = page.locator('.xterm-rows')
   await expect(terminalRows).toContainText(f1Ready, { timeout: 12_000 })
   await expect(terminalRows).not.toContainText(f1Result)
-  await page.getByRole('button', { name: '更多按键' }).click()
+  const f1Tools = page.getByRole('button', { name: '终端工具', exact: true })
+  if (await f1Tools.getAttribute('aria-expanded') !== 'true') await f1Tools.click()
   const f1Button = page.getByRole('button', { name: 'F1', exact: true })
   await expect(f1Button).toBeVisible()
   await f1Button.click()
   await expect(terminalRows).toContainText(f1Result, { timeout: 12_000 })
+  await page.getByRole('button', { name: '关闭终端工具' }).click()
 
   await page.getByRole('button', { name: 'Open sessions' }).click()
   await page.getByRole('button', { name: `Stop ${name}` }).click()

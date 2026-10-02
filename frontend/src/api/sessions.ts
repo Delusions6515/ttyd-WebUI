@@ -1,11 +1,14 @@
 import type { Session, SessionStatus, Shell } from '../types/session'
 
+export type ScrollDirection = 'up' | 'down' | 'bottom'
+
 export interface SessionApi {
   getSessions(): Promise<Session[]>
   getShells(): Promise<Shell[]>
   createSession(name: string, shell: string): Promise<Session>
   stopSession(name: string): Promise<Session>
   restartSession(name: string): Promise<Session>
+  scrollSession(name: string, direction: ScrollDirection, lines?: number): Promise<Session>
   deleteSession(name: string): Promise<{ name: string }>
 }
 
@@ -97,6 +100,13 @@ export const sessionApi: SessionApi = {
   },
   async restartSession(name) {
     const response = await requestJson(`/api/sessions/${encodeURIComponent(name)}/restart`, { method: 'POST' })
+    return parseSession(response)
+  },
+  async scrollSession(name, direction, lines) {
+    const response = await requestJson(`/api/sessions/${encodeURIComponent(name)}/scroll`, {
+      method: 'POST',
+      body: JSON.stringify(lines === undefined ? { direction } : { direction, lines }),
+    })
     return parseSession(response)
   },
   async deleteSession(name) {
