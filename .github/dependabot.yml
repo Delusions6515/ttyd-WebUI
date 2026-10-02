@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      patch:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+      minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
