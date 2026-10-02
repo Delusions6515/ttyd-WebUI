@@ -168,13 +168,16 @@ test('HTTP proxy preserves ttyd base paths and routes each session to its own po
 });
 
 test('API errors and unknown upgrade paths never fall through to the SPA', async (t) => {
-  const staticDir = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'ttyd-webui-proxy-'));
+  const staticRoot = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'ttyd-webui-proxy-'));
+  const staticDir = require('node:path').join(staticRoot, '.deployment', 'dist');
+  require('node:fs').mkdirSync(staticDir, { recursive: true });
   require('node:fs').writeFileSync(require('node:path').join(staticDir, 'index.html'), '<main>app</main>');
+  require('node:fs').writeFileSync(require('node:path').join(staticDir, '.private-fixture'), 'not-public');
   const app = createApp({ sessionManager: fakeManager([]), publicDir: staticDir, port: 3000, host: '127.0.0.1' });
   const serverPort = await listen(app.server);
   t.after(async () => {
     await app.close();
-    require('node:fs').rmSync(staticDir, { recursive: true, force: true });
+    require('node:fs').rmSync(staticRoot, { recursive: true, force: true });
   });
   const origin = `http://127.0.0.1:${serverPort}`;
 
@@ -182,7 +185,13 @@ test('API errors and unknown upgrade paths never fall through to the SPA', async
   assert.equal(missingApi.status, 404);
   assert.match(missingApi.headers.get('content-type'), /application\/json/);
   assert.equal(missingApi.headers.get('content-security-policy'), "frame-ancestors 'none'");
-  assert.equal(await (await fetch(`${origin}/unmatched/path`)).text(), '<main>app</main>');
+  const rootPage = await fetch(`${origin}/`);
+  assert.equal(rootPage.status, 200);
+  assert.equal(await rootPage.text(), '<main>app</main>');
+  const fallbackPage = await fetch(`${origin}/unmatched/path`);
+  assert.equal(fallbackPage.status, 200, 'SPA fallback works when the deployment directory is hidden');
+  assert.equal(await fallbackPage.text(), '<main>app</main>');
+  assert.equal(await (await fetch(`${origin}/.private-fixture`)).text(), '<main>app</main>', 'dotfile contents are not exposed');
   const notFound = await fetch(`${origin}/ws`);
   assert.equal(notFound.status, 404);
   assert.match(notFound.headers.get('content-type'), /application\/json/);
