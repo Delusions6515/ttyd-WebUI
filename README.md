@@ -1,5 +1,7 @@
 # ttyd WebUI
 
+**User guides:** [English](docs/usage.md) · [简体中文](docs/usage.zh-CN.md)
+
 A mobile-first browser interface for managed `ttyd` + `tmux` terminal sessions. It is an independent application; the upstream Web TTYd Hub source is not a runtime dependency.
 
 ## Requirements
@@ -31,13 +33,13 @@ The application and proxied ttyd HTML set the enforced response policy `Content-
 
 ## Sessions and tmux
 
-Each session uses a separate named tmux server socket, `ttyd-webui` by default. Inspect only that namespace with:
+Application sessions share a dedicated named tmux server socket, `ttyd-webui` by default, separate from the host's default tmux server. Inspect only that namespace with:
 
 ```sh
 tmux -L ttyd-webui list-sessions
 ```
 
-Do not use the host's default tmux socket to inspect or manage application sessions. Closing a browser, stopping web access, or restarting the service stops managed `ttyd` processes but preserves existing tmux tasks. The in-memory management list is intentionally empty after a service restart and does not rediscover old or external tmux sessions; this first release does not provide a recovery/import screen. New sessions cannot reuse names held by preserved tmux tasks; automatic naming skips them. Manage cleanup only through a session's Delete action or the application's own socket namespace.
+Do not use the host's default tmux socket to inspect or manage application sessions. Closing a browser leaves the tmux task running. Stopping web access or restarting the service stops managed `ttyd` processes but preserves existing tmux tasks. The in-memory management list is intentionally empty after a service restart and does not rediscover old or external tmux sessions; this first release does not provide a recovery/import screen. New sessions cannot reuse names held by preserved tmux tasks; automatic naming skips them. Manage cleanup only through a session's Delete action or the application's own socket namespace.
 
 ## Browser limitations
 
