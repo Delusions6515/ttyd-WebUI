@@ -119,7 +119,7 @@ function createApp(options = {}) {
 
   app.use(express.static(publicDir));
   app.get(/^\/(?!(?:api|terminal|ws)(?:\/|$)).*/, (req, res, next) => {
-    res.sendFile(path.join(publicDir, 'index.html'), (error) => {
+    res.sendFile('index.html', { root: publicDir }, (error) => {
       if (error) next(error);
     });
   });
