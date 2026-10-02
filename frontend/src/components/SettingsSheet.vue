@@ -362,7 +362,10 @@ function restoreDefaults(): void {
             <a href="/fonts/NERD-FONTS-LICENSE.txt" target="_blank" rel="noreferrer">Nerd Fonts 补丁许可说明</a>
           </p>
           <p>复用的 Web TTYd Hub 后端来源及 MIT 声明按固定上游版本记录在本项目第三方通知中。</p>
+          <p>项目仓库只包含已发布版本；运行未发布或含本地修改的版本时，请部署方提供与实际部署完全对应的源码。</p>
           <p class="license-links">
+            <a href="https://github.com/Delusions6515/ttyd-WebUI" target="_blank" rel="noreferrer">项目公开源码仓库</a>
+            <a href="https://github.com/Delusions6515/ttyd-WebUI/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noreferrer">本项目第三方通知</a>
             <a href="https://github.com/sosopop/web-ttyd-hub/tree/325822e0328da9bf8aa38394455805438a0f76d5" target="_blank" rel="noreferrer">后端固定源码与上游声明</a>
           </p>
         </section>

@@ -38,6 +38,7 @@ test('HTTP proxy preserves ttyd base paths and routes each session to its own po
   const upstreams = [
     responseServer((req, res) => {
       seen.push(['alpha', req.url]);
+      assert.equal(req.headers.authorization, 'Basic alpha-secret');
       if (req.url === '/terminal/alpha/page') {
         res.setHeader('content-type', 'text/html');
         res.setHeader('content-security-policy', 'default-src \'self\'');
@@ -49,13 +50,14 @@ test('HTTP proxy preserves ttyd base paths and routes each session to its own po
     }),
     responseServer((req, res) => {
       seen.push(['beta', req.url]);
+      assert.equal(req.headers.authorization, 'Basic beta-secret');
       res.end('beta');
     }),
   ];
   const ports = await Promise.all(upstreams.map((server) => listen(server)));
   const sessions = [
-    { name: 'alpha', status: 'running', port: ports[0] },
-    { name: 'beta', status: 'running', port: ports[1] },
+    { name: 'alpha', status: 'running', port: ports[0], upstreamAuthorization: 'Basic alpha-secret' },
+    { name: 'beta', status: 'running', port: ports[1], upstreamAuthorization: 'Basic beta-secret' },
     { name: 'stopped', status: 'stopped', port: ports[0] },
   ];
   const app = createApp({ sessionManager: fakeManager(sessions), port: 3000, host: '127.0.0.1' });
@@ -66,7 +68,7 @@ test('HTTP proxy preserves ttyd base paths and routes each session to its own po
   });
 
   const origin = `http://127.0.0.1:${serverPort}`;
-  assert.equal(await (await fetch(`${origin}/terminal/alpha/token?query=1`)).text(), 'alpha');
+  assert.equal(await (await fetch(`${origin}/terminal/alpha/token?query=1`, { headers: { Authorization: 'Basic forged' } })).text(), 'alpha');
   assert.equal(await (await fetch(`${origin}/terminal/beta/ws`)).text(), 'beta');
   const terminalPage = await fetch(`${origin}/terminal/alpha/page`);
   assert.equal(await terminalPage.text(), '<main>terminal</main>');
@@ -118,14 +120,17 @@ test('terminal WebSocket upgrades work before any HTTP request and reject stoppe
   const echoes = [];
   const upstream = http.createServer();
   const upstreamWss = new WebSocketServer({ noServer: true });
-  upstream.on('upgrade', (req, socket, head) => upstreamWss.handleUpgrade(req, socket, head, (ws) => {
-    ws.on('message', (message) => {
-      echoes.push(message.toString());
-      ws.send(`echo:${message}`);
+  upstream.on('upgrade', (req, socket, head) => {
+    assert.equal(req.headers.authorization, 'Basic term-secret');
+    upstreamWss.handleUpgrade(req, socket, head, (ws) => {
+      ws.on('message', (message) => {
+        echoes.push(message.toString());
+        ws.send(`echo:${message}`);
+      });
     });
-  }));
+  });
   const upstreamPort = await listen(upstream);
-  const sessions = [{ name: 'term', status: 'running', port: upstreamPort }, { name: 'off', status: 'stopped', port: upstreamPort }];
+  const sessions = [{ name: 'term', status: 'running', port: upstreamPort, upstreamAuthorization: 'Basic term-secret' }, { name: 'off', status: 'stopped', port: upstreamPort }];
   const app = createApp({ sessionManager: fakeManager(sessions), port: 3000, host: '127.0.0.1' });
   const serverPort = await listen(app.server);
   t.after(async () => {
@@ -134,7 +139,7 @@ test('terminal WebSocket upgrades work before any HTTP request and reject stoppe
     await close(upstream);
   });
 
-  const socket = new WebSocket(`ws://127.0.0.1:${serverPort}/terminal/term/ws`, 'tty');
+  const socket = new WebSocket(`ws://127.0.0.1:${serverPort}/terminal/term/ws`, 'tty', { headers: { Authorization: 'Basic forged' } });
   const response = await new Promise((resolve, reject) => {
     socket.once('open', () => socket.send('probe'));
     socket.once('message', (message) => resolve(message.toString()));

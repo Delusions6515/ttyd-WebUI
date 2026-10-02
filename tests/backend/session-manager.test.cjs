@@ -51,6 +51,11 @@ function createHarness(options = {}) {
     },
     waitForPort: options.waitForPort || (async () => {}),
     execFile(command, args, execOptions, callback) {
+      if (args.includes('has-session')) {
+        const occupied = options.occupiedNames?.includes(args.at(-1).slice(1));
+        setImmediate(() => callback(occupied ? null : new Error("can't find session")));
+        return;
+      }
       tmuxCalls.push({ command, args, execOptions });
       setImmediate(() => callback(options.tmuxError || null));
     },
@@ -93,11 +98,35 @@ test('create binds ttyd to loopback, isolates tmux, and stop preserves the task'
   assert.deepEqual(harness.tmuxCalls, []);
 });
 
+test('new records cannot adopt preserved tmux names and automatic names skip them', async () => {
+  const harness = createHarness({ occupiedNames: ['dev', 'sh-1', 'sh-2'] });
+  await assert.rejects(harness.manager.create('dev', 'sh'), /already exists in tmux/);
+  assert.equal(harness.spawned.length, 0);
+  const created = await harness.manager.create(undefined, 'sh');
+  assert.equal(created.name, 'sh-3');
+  assert.deepEqual(harness.manager.list().map(({ name }) => name), ['sh-3']);
+});
+
+test('ttyd credentials rotate per process and never appear in DTOs', async () => {
+  const harness = createHarness();
+  const created = await harness.manager.create('private', 'sh');
+  const firstArgs = harness.spawned[0].args;
+  const first = firstArgs[firstArgs.indexOf('-c') + 1];
+  assert.match(first, /^ttyd:[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(created).includes(first), false);
+  assert.equal(harness.manager.getSession('private').upstreamAuthorization, `Basic ${Buffer.from(first).toString('base64')}`);
+  await harness.manager.stop('private');
+  await harness.manager.restart('private');
+  const nextArgs = harness.spawned[1].args;
+  assert.notEqual(nextArgs[nextArgs.indexOf('-c') + 1], first);
+});
+
 test('concurrent same-name creates reserve the name before awaiting readiness', async () => {
   const ready = deferred();
   const harness = createHarness({ waitForPort: () => ready.promise });
   const first = harness.manager.create('same', 'sh');
   await assert.rejects(harness.manager.create('same', 'sh'), /already exists/i);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(harness.spawned.length, 1);
   ready.resolve();
   assert.equal((await first).name, 'same');
@@ -190,9 +219,14 @@ test('remove waits for ttyd exit and targets only the exact tmux session', async
 test('tmux permission failures do not report successful deletion', async () => {
   const harness = createHarness({ tmuxError: Object.assign(new Error('permission denied'), { code: 1 }) });
   await harness.manager.create('dev', 'sh');
+  const stopped = [];
+  harness.manager.on('session:stopped', (value) => stopped.push(value));
 
   await assert.rejects(harness.manager.remove('dev'), /permission denied/i);
   assert.equal(harness.manager.list().length, 1);
+  assert.equal(harness.manager.list()[0].status, 'stopped');
+  assert.equal(stopped.length, 1);
+  assert.equal(stopped[0].status, 'stopped');
 });
 
 test('an early ttyd exit fails creation and releases only its own port', async () => {
@@ -263,15 +297,43 @@ test('missing tmux sessions are already ended and can be removed', async () => {
   assert.deepEqual(harness.manager.list(), []);
 });
 
+test('a missing tmux socket directory is treated as an already absent target', async () => {
+  const missingSocket = Object.assign(
+    new Error('error connecting to /tmp/tmux-test/tmux-1006/ttyd-webui-test (No such file or directory)'),
+    { code: 1 },
+  );
+  const harness = createHarness({ tmuxError: missingSocket });
+  await harness.manager.create('never-attached', 'sh');
+
+  assert.deepEqual(await harness.manager.remove('never-attached'), { name: 'never-attached' });
+  assert.deepEqual(harness.manager.list(), []);
+});
+
+test('startup diagnostics never expose raw or base64 ttyd credentials', async () => {
+  let credential;
+  const harness = createHarness({ waitForPort: async () => {
+    const args = harness.spawned[0].args;
+    credential = args[args.indexOf('-c') + 1];
+    harness.children[0].stderr.write(`${credential} ${Buffer.from(credential).toString('base64')}`);
+    throw new Error(`startup failed: ${credential}`);
+  } });
+  await assert.rejects(harness.manager.create('private', 'sh'), (error) => {
+    assert.equal(error.message.includes(credential), false);
+    assert.equal(error.message.includes(Buffer.from(credential).toString('base64')), false);
+    assert.match(error.message, /redacted/);
+    return true;
+  });
+});
+
 test('startup failures retain bounded diagnostics and release a port only after child exit', async () => {
   const ready = deferred();
   const child = new FakeChild(1);
   const harness = createHarness({ waitForPort: () => {
     child.stderr.write('x'.repeat(100_000));
+    ready.reject(new Error('startup timed out'));
     return ready.promise;
   } });
   harness.manager.spawn = () => child;
-  ready.reject(new Error('startup timed out'));
   const originalRelease = harness.manager.portManager.release.bind(harness.manager.portManager);
   let releasedBeforeExit = false;
   harness.manager.portManager.release = (port) => {

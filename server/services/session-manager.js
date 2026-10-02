@@ -1,5 +1,6 @@
 const { spawn: defaultSpawn, execFile: defaultExecFile } = require('node:child_process');
 const fs = require('node:fs');
+const { randomBytes } = require('node:crypto');
 const net = require('node:net');
 const EventEmitter = require('node:events');
 const PortManager = require('./port-manager');
@@ -144,6 +145,10 @@ class SessionManager extends EventEmitter {
     return this.serializeOperation(sessionName, async () => {
       try {
         const shellPath = this.resolveShell(shell);
+        if (await this.tmuxSessionExists(sessionName)) {
+          if (!name) return this.create(undefined, shell);
+          throw setErrorStatus(new Error(`Session "${sessionName}" already exists in tmux`), 409);
+        }
         const session = {
           name: sessionName,
           port: null,
@@ -177,6 +182,9 @@ class SessionManager extends EventEmitter {
     session.status = 'starting';
     session.port = port;
 
+    const credential = `ttyd:${randomBytes(32).toString('hex')}`;
+    const encodedCredential = Buffer.from(credential).toString('base64');
+    session.upstreamAuthorization = `Basic ${encodedCredential}`;
     const tmuxArgs = ['tmux', '-L', this.tmuxSocket, 'new', '-A', '-s', session.name];
     if (shellPath) tmuxArgs.push(shellPath);
 
@@ -185,6 +193,7 @@ class SessionManager extends EventEmitter {
       child = this.spawn('ttyd', [
         '-i', '127.0.0.1',
         '-W', '-p', String(port),
+        '-c', credential,
         '-b', `/terminal/${session.name}`,
         '-s', '9',
         '-t', 'theme={"background":"#000000"}',
@@ -211,6 +220,9 @@ class SessionManager extends EventEmitter {
       stderr = Buffer.concat([stderr, next]);
       if (stderr.length > MAX_STDERR_BYTES) stderr = stderr.subarray(stderr.length - MAX_STDERR_BYTES);
     });
+
+    const redactDiagnostic = (text) => text.replaceAll(credential, '[redacted]')
+      .replaceAll(encodedCredential, '[redacted]');
 
     let closed = false;
     let exitCode = null;
@@ -258,7 +270,7 @@ class SessionManager extends EventEmitter {
     });
 
     const exitedBeforeReady = closePromise.then(({ code, signal }) => {
-      const detail = spawnError?.message || stderr.toString('utf8').trim();
+      const detail = redactDiagnostic(spawnError?.message || stderr.toString('utf8').trim());
       throw new Error(`ttyd exited before becoming ready${detail ? `: ${detail}` : ` (code ${code ?? 'unknown'}${signal ? `, signal ${signal}` : ''})`}`);
     });
 
@@ -289,8 +301,8 @@ class SessionManager extends EventEmitter {
       session.pid = null;
       session.process = null;
       session.port = null;
-      const reason = error.message || String(error);
-      const diagnostic = stderr.toString('utf8').trim();
+      const reason = redactDiagnostic(error.message || String(error));
+      const diagnostic = redactDiagnostic(stderr.toString('utf8').trim());
       const detail = diagnostic && !reason.includes(diagnostic) ? `${reason}: ${diagnostic}` : reason;
       throw new Error(`ttyd failed to start: ${detail}`);
     }
@@ -342,13 +354,34 @@ class SessionManager extends EventEmitter {
   remove(name) {
     return this.serializeOperation(name, async () => {
       const session = this.getSession(name);
-      if (session.status === 'running') await this.stopProcess(session);
-      else if (session.process) await this.stopProcess(session);
+      if (session.process) {
+        await this.stopProcess(session);
+        this.emit('session:stopped', this.serialize(session));
+      }
 
       await this.killTmuxSession(name);
       if (this.sessions.get(name) === session) this.sessions.delete(name);
       this.emit('session:deleted', { name });
       return { name };
+    });
+  }
+
+  tmuxSessionExists(name) {
+    return new Promise((resolve, reject) => {
+      this.execFile('tmux', ['-L', this.tmuxSocket, 'has-session', '-t', `=${name}`], {
+        encoding: 'utf8',
+        timeout: 5000,
+        maxBuffer: 64 * 1024,
+        env: this.spawnEnv,
+      }, (error, _stdout, stderr) => {
+        if (!error) return resolve(true);
+        const message = `${error.message || ''}\n${stderr || ''}`;
+        if (/no server running|can't find session|no such session/i.test(message)
+            || /error connecting to .+ \(No such file or directory\)/i.test(message)) {
+          return resolve(false);
+        }
+        reject(error);
+      });
     });
   }
 
@@ -358,13 +391,15 @@ class SessionManager extends EventEmitter {
         encoding: 'utf8',
         timeout: 5000,
         maxBuffer: 64 * 1024,
+        env: this.spawnEnv,
       }, (error, _stdout, stderr) => {
         if (!error) {
           resolve();
           return;
         }
         const message = `${error.message || ''}\n${stderr || ''}`;
-        if (/no server running|can't find session|no such session/i.test(message)) {
+        if (/no server running|can't find session|no such session/i.test(message)
+            || /error connecting to .+ \(No such file or directory\)/i.test(message)) {
           resolve();
           return;
         }
@@ -417,6 +452,7 @@ class SessionManager extends EventEmitter {
       } catch (error) {
         failures.push(error);
       }
+      return undefined;
     }));
     if (failures.length) throw new AggregateError(failures, 'One or more ttyd processes could not be stopped');
   }

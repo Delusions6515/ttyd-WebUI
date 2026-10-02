@@ -121,7 +121,7 @@ export class TtydClient {
     this.sessionName = sessionName
     this.callbacks = callbacks
     this.location = environment.location ?? pageLocation()
-    this.fetchImpl = environment.fetch ?? fetch
+    this.fetchImpl = environment.fetch ?? fetch.bind(globalThis)
     this.socketFactory = environment.createWebSocket ?? ((url, protocols) => new WebSocket(url, protocols))
   }
 

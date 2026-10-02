@@ -9,6 +9,11 @@
     "typecheck": "pnpm --filter ./frontend typecheck",
     "test:backend": "node --test tests/backend/*.test.cjs",
     "test:frontend": "pnpm --filter ./frontend test",
-    "verify": "pnpm build"
+    "test:integration": "node --test tests/integration/*.test.cjs",
+    "test:e2e": "pnpm run build && pnpm exec playwright test --config=playwright.config.ts",
+    "verify": "pnpm run build && pnpm run typecheck && pnpm run test:backend && pnpm run test:frontend && pnpm run test:integration && pnpm exec playwright test --config=playwright.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
   }
 }

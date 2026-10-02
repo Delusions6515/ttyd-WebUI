@@ -1,6 +1,6 @@
-require('dotenv').config();
-const express = require('express');
 const path = require('node:path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+const express = require('express');
 const http = require('node:http');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const SessionManager = require('./services/session-manager');
@@ -28,7 +28,7 @@ function createApp(options = {}) {
     trustedOrigins: options.trustedOrigins ?? process.env.TRUSTED_ORIGINS ?? [],
     viteOrigin: options.viteOrigin ?? process.env.VITE_ORIGIN,
   });
-  const publicDir = options.publicDir || path.join(__dirname, 'public');
+  const publicDir = options.publicDir || path.resolve(__dirname, '../frontend/dist');
 
   app.use(originGuard.middleware);
   app.use((_req, res, next) => {
@@ -78,7 +78,15 @@ function createApp(options = {}) {
     pathRewrite: (_path, req) => req.originalUrl || req.url,
     on: {
       error: proxyError,
-      proxyReqWs: (proxyRequest) => {
+      proxyReq: (proxyRequest, req) => {
+        if (req.ttydSession?.upstreamAuthorization) {
+          proxyRequest.setHeader('Authorization', req.ttydSession.upstreamAuthorization);
+        }
+      },
+      proxyReqWs: (proxyRequest, req) => {
+        if (req.ttydSession?.upstreamAuthorization) {
+          proxyRequest.setHeader('Authorization', req.ttydSession.upstreamAuthorization);
+        }
         proxyRequest.once('upgrade', (_response, socket) => {
           terminalProxySockets.add(socket);
           socket.once('close', () => terminalProxySockets.delete(socket));
